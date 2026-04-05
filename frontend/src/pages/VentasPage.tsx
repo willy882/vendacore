@@ -1,9 +1,10 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Search, Plus, Minus, Trash2, ShoppingCart,
-  User, CreditCard, CheckCircle, X, Package,
+  User, CreditCard, CheckCircle, X, Package, ScanLine,
 } from 'lucide-react';
+import { BrowserMultiFormatReader } from '@zxing/browser';
 import { productsService } from '@/services/products.service';
 import { salesService } from '@/services/sales.service';
 import { customersService } from '@/services/customers.service';
@@ -254,6 +255,81 @@ function CustomerModal({ open, onClose, onSelect }: {
   );
 }
 
+// ─── Modal escáner de código de barras ───────────────────────────────────────
+
+function ScannerModal({ open, onClose, onScan }: {
+  open: boolean;
+  onClose: () => void;
+  onScan: (code: string) => void;
+}) {
+  const videoRef  = useRef<HTMLVideoElement>(null);
+  const readerRef = useRef<BrowserMultiFormatReader | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [scanned, setScanned] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!open || !videoRef.current) return;
+    setError(null);
+    setScanned(null);
+
+    const reader = new BrowserMultiFormatReader();
+    readerRef.current = reader;
+
+    reader.decodeFromVideoDevice(undefined, videoRef.current, (result, err) => {
+      if (result) {
+        const code = result.getText();
+        setScanned(code);
+        onScan(code);
+        // pausa 1.5s para mostrar feedback antes de cerrar
+        setTimeout(() => { onClose(); setScanned(null); }, 1200);
+      }
+      if (err && err.name !== 'NotFoundException') {
+        setError('No se pudo acceder a la cámara. Verifica los permisos.');
+      }
+    }).catch(() => setError('No se pudo acceder a la cámara. Verifica los permisos.'));
+
+    return () => {
+      readerRef.current = null;
+      BrowserMultiFormatReader.releaseAllStreams();
+    };
+  }, [open]);
+
+  return (
+    <Modal open={open} onClose={onClose} title="Escanear código de barras" size="sm">
+      <div className="flex flex-col items-center gap-4">
+        {error ? (
+          <div className="w-full rounded-lg bg-red-50 border border-red-200 px-4 py-6 text-sm text-red-700 text-center">
+            {error}
+          </div>
+        ) : (
+          <div className="relative w-full rounded-xl overflow-hidden bg-black aspect-video">
+            <video ref={videoRef} className="w-full h-full object-cover" muted autoPlay playsInline />
+            {/* Visor de enfoque */}
+            <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+              <div className={`w-56 h-28 rounded-lg border-2 transition-colors ${scanned ? 'border-emerald-400 bg-emerald-400/10' : 'border-white/60'}`}>
+                {!scanned && (
+                  <div className="absolute top-0 left-0 right-0 h-0.5 bg-red-400 animate-bounce" />
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {scanned ? (
+          <div className="flex items-center gap-2 text-emerald-700 font-medium text-sm">
+            <CheckCircle size={18} />
+            Código detectado: <span className="font-mono">{scanned}</span>
+          </div>
+        ) : (
+          <p className="text-sm text-slate-500 text-center">
+            Apunta la cámara al código de barras del producto
+          </p>
+        )}
+      </div>
+    </Modal>
+  );
+}
+
 // ─── Página principal ─────────────────────────────────────────────────────────
 
 export default function VentasPage() {
@@ -266,9 +342,11 @@ export default function VentasPage() {
   const [catFilter, setCatFilter] = useState('');
 
   // Modales
-  const [payModal, setPayModal]  = useState(false);
-  const [custModal, setCustModal] = useState(false);
+  const [payModal, setPayModal]     = useState(false);
+  const [custModal, setCustModal]   = useState(false);
+  const [scanModal, setScanModal]   = useState(false);
   const [successSale, setSuccessSale] = useState<string | null>(null);
+  const [scanError, setScanError]   = useState<string | null>(null);
 
   // Queries
   const { data: products, isLoading: loadingProducts } = useQuery({
@@ -368,6 +446,27 @@ export default function VentasPage() {
     });
   };
 
+  // Escáner: busca el producto por código y lo agrega al carrito
+  const handleScan = useCallback((code: string) => {
+    const allProducts = products?.data ?? [];
+    const found = allProducts.find(
+      (p) => p.codigoBarras === code || p.codigoInterno === code,
+    );
+    if (found) {
+      addToCart(found);
+      setScanError(null);
+    } else {
+      // Busca en la API si no está en la página actual
+      productsService.getAll({ search: code, isActive: true, limit: 5 }).then((res) => {
+        const match = res.data.find(
+          (p) => p.codigoBarras === code || p.codigoInterno === code,
+        );
+        if (match) { addToCart(match); setScanError(null); }
+        else setScanError(`No se encontró producto con código: ${code}`);
+      });
+    }
+  }, [products, addToCart]);
+
   const catOptions = [
     { value: '', label: 'Todas' },
     ...(categories ?? []).map((c) => ({ value: c.id, label: c.nombre })),
@@ -386,6 +485,13 @@ export default function VentasPage() {
             onChange={(e) => setSearch(e.target.value)}
             className="flex-1"
           />
+          <button
+            onClick={() => { setScanError(null); setScanModal(true); }}
+            className="px-3 py-2 rounded-lg border border-slate-300 hover:bg-blue-50 hover:border-blue-400 text-slate-500 hover:text-blue-600 transition-colors"
+            title="Escanear código de barras"
+          >
+            <ScanLine size={18} />
+          </button>
           <Select
             options={catOptions}
             value={catFilter}
@@ -393,6 +499,11 @@ export default function VentasPage() {
             className="w-40"
           />
         </div>
+        {scanError && (
+          <div className="text-xs text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+            {scanError}
+          </div>
+        )}
 
         {/* Grid de productos */}
         <div className="flex-1 overflow-y-auto">
@@ -522,6 +633,12 @@ export default function VentasPage() {
         open={custModal}
         onClose={() => setCustModal(false)}
         onSelect={setCustomer}
+      />
+
+      <ScannerModal
+        open={scanModal}
+        onClose={() => setScanModal(false)}
+        onScan={handleScan}
       />
 
       {/* Venta exitosa */}

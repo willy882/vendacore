@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -6,8 +6,9 @@ import { z } from 'zod';
 import {
   Plus, Search, Pencil, ToggleLeft, ToggleRight,
   AlertTriangle, Package, ChevronLeft, ChevronRight,
-  Tag, Trash2,
+  Tag, Trash2, RefreshCw, Barcode, Download, Printer,
 } from 'lucide-react';
+import JsBarcode from 'jsbarcode';
 
 import { productsService } from '@/services/products.service';
 import { Card } from '@/components/ui/Card';
@@ -41,6 +42,128 @@ const schema = z.object({
 
 type FormData = z.infer<typeof schema>;
 
+// ── Generador de código de barras EAN-13 ──────────────────────────────────────
+
+function generateEAN13(): string {
+  // Prefijo 775 (Perú asignado por GS1)
+  const prefix = '775';
+  const body   = Array.from({ length: 9 }, () => Math.floor(Math.random() * 10)).join('');
+  const raw    = prefix + body;                      // 12 dígitos
+  const digits = raw.split('').map(Number);
+  // Checksum EAN-13: posiciones impares ×1, pares ×3
+  const sum    = digits.reduce((acc, d, i) => acc + d * (i % 2 === 0 ? 1 : 3), 0);
+  const check  = (10 - (sum % 10)) % 10;
+  return raw + check;
+}
+
+// ── Modal de código de barras ─────────────────────────────────────────────────
+
+function BarcodeModal({ open, onClose, product }: {
+  open: boolean; onClose: () => void; product: Product | null;
+}) {
+  const svgRef  = useRef<SVGSVGElement>(null);
+  const [qty, setQty] = useState(1);
+  const code = product?.codigoBarras ?? product?.codigoInterno ?? '';
+
+  useEffect(() => {
+    if (!open || !svgRef.current || !code) return;
+    try {
+      JsBarcode(svgRef.current, code, {
+        format:      'CODE128',
+        width:       2,
+        height:      80,
+        displayValue: true,
+        fontSize:    14,
+        margin:      10,
+        background:  '#ffffff',
+        lineColor:   '#000000',
+      });
+    } catch { /* código inválido */ }
+  }, [open, code]);
+
+  const downloadPNG = useCallback(() => {
+    if (!svgRef.current) return;
+    const svg    = svgRef.current;
+    const xml    = new XMLSerializer().serializeToString(svg);
+    const blob   = new Blob([xml], { type: 'image/svg+xml' });
+    const url    = URL.createObjectURL(blob);
+    // Convertir SVG → Canvas → PNG
+    const img    = new Image();
+    img.onload   = () => {
+      const canvas = document.createElement('canvas');
+      canvas.width  = svg.width.baseVal.value * 2;
+      canvas.height = svg.height.baseVal.value * 2;
+      const ctx = canvas.getContext('2d')!;
+      ctx.scale(2, 2);
+      ctx.drawImage(img, 0, 0);
+      URL.revokeObjectURL(url);
+      const a = document.createElement('a');
+      a.href     = canvas.toDataURL('image/png');
+      a.download = `barcode-${code}.png`;
+      a.click();
+    };
+    img.src = url;
+  }, [code]);
+
+  const printLabels = useCallback(() => {
+    if (!svgRef.current) return;
+    const xml  = new XMLSerializer().serializeToString(svgRef.current);
+    const b64  = btoa(unescape(encodeURIComponent(xml)));
+    const labelHtml = `<img src="data:image/svg+xml;base64,${b64}" style="width:180px;display:block"/>
+      <p style="font-size:11px;text-align:center;margin:2px 0 0;font-family:sans-serif">${product?.nombre ?? ''}</p>`;
+    const grid = Array.from({ length: qty }, () =>
+      `<div style="display:inline-block;border:1px dashed #ccc;padding:6px;margin:4px;vertical-align:top">${labelHtml}</div>`
+    ).join('');
+    const win = window.open('', '_blank', 'width=800,height=600');
+    if (!win) return;
+    win.document.write(`<!DOCTYPE html><html><head><title>Etiquetas — ${product?.nombre}</title>
+      <style>body{margin:16px;font-family:sans-serif}@media print{body{margin:0}}</style></head>
+      <body><div>${grid}</div><script>window.onload=()=>{window.print();window.close()}<\/script></body></html>`);
+    win.document.close();
+  }, [code, qty, product]);
+
+  if (!product) return null;
+
+  return (
+    <Modal open={open} onClose={onClose} title="Código de barras" size="sm">
+      <div className="flex flex-col items-center gap-4">
+        {code ? (
+          <>
+            <div className="bg-white border border-slate-200 rounded-xl p-4 w-full flex justify-center">
+              <svg ref={svgRef} />
+            </div>
+
+            <p className="text-sm text-slate-600 text-center font-medium">{product.nombre}</p>
+
+            {/* Cantidad de etiquetas */}
+            <div className="flex items-center gap-3 w-full">
+              <label className="text-sm text-slate-600 whitespace-nowrap">Cantidad de etiquetas:</label>
+              <input
+                type="number" min={1} max={100} value={qty}
+                onChange={(e) => setQty(Math.max(1, parseInt(e.target.value) || 1))}
+                className="w-20 px-3 py-1.5 text-sm border border-slate-300 rounded-lg text-center focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
+
+            <div className="flex gap-2 w-full">
+              <Button variant="outline" icon={<Download size={15} />} onClick={downloadPNG} className="flex-1">
+                Descargar PNG
+              </Button>
+              <Button icon={<Printer size={15} />} onClick={printLabels} className="flex-1">
+                Imprimir {qty} etiqueta{qty !== 1 ? 's' : ''}
+              </Button>
+            </div>
+          </>
+        ) : (
+          <div className="py-8 text-center text-slate-400 text-sm">
+            Este producto no tiene código de barras asignado.
+          </div>
+        )}
+      </div>
+    </Modal>
+  );
+}
+
 // ── Badge de stock ────────────────────────────────────────────────────────────
 
 function StockBadge({ product }: { product: Product }) {
@@ -69,7 +192,7 @@ function ProductModal({ open, onClose, product, categories }: ProductModalProps)
   const qc = useQueryClient();
   const isEdit = !!product;
 
-  const { register, handleSubmit, reset, formState: { errors, isSubmitting } } =
+  const { register, handleSubmit, reset, setValue, formState: { errors, isSubmitting } } =
     useForm<FormData>({
       resolver: zodResolver(schema),
       defaultValues: product
@@ -87,6 +210,13 @@ function ProductModal({ open, onClose, product, categories }: ProductModalProps)
           }
         : { igvTipo: 'gravado' as const, precioVenta: '', precioCompra: '', stockMinimo: '' },
     });
+
+  // Auto-generar EAN-13 al abrir el modal de creación
+  useEffect(() => {
+    if (open && !isEdit) {
+      setValue('codigoBarras', generateEAN13());
+    }
+  }, [open, isEdit, setValue]);
 
   const createMut = useMutation({
     mutationFn: productsService.create,
@@ -157,8 +287,25 @@ function ProductModal({ open, onClose, product, categories }: ProductModalProps)
         <Input label="Nombre *" placeholder="Ej: Arroz extra" error={errors.nombre?.message} {...register('nombre')} />
 
         <div className="grid grid-cols-2 gap-4">
-          <Input label="Código interno"  placeholder="Ej: PROD-001" {...register('codigoInterno')} />
-          <Input label="Código de barras" placeholder="Ej: 7750000001234" {...register('codigoBarras')} />
+          <Input label="Código interno" placeholder="Ej: PROD-001" {...register('codigoInterno')} />
+          <div>
+            <label className="block text-xs font-medium text-slate-600 mb-1">Código de barras (EAN-13)</label>
+            <div className="flex gap-2">
+              <input
+                {...register('codigoBarras')}
+                className="flex-1 px-3 py-2 text-sm border border-slate-300 rounded-lg font-mono focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                placeholder="7750000000000"
+              />
+              <button
+                type="button"
+                onClick={() => setValue('codigoBarras', generateEAN13())}
+                className="px-3 py-2 rounded-lg border border-slate-300 hover:bg-slate-50 text-slate-500 hover:text-blue-600 transition-colors"
+                title="Generar nuevo código"
+              >
+                <RefreshCw size={15} />
+              </button>
+            </div>
+          </div>
         </div>
 
         <div className="grid grid-cols-2 gap-4">
@@ -300,18 +447,21 @@ export default function ProductsPage() {
   const [page, setPage]           = useState(1);
 
   // Modales
-  const [prodModal, setProdModal]   = useState(false);
-  const [catModal, setCatModal]     = useState(false);
-  const [editing, setEditing]       = useState<Product | null>(null);
+  const [prodModal, setProdModal]     = useState(false);
+  const [catModal, setCatModal]       = useState(false);
+  const [barcodeModal, setBarcodeModal] = useState(false);
+  const [editing, setEditing]         = useState<Product | null>(null);
+  const [barcodeProduct, setBarcodeProduct] = useState<Product | null>(null);
 
   // Queries
   const { data: catData } = useQuery({
     queryKey: ['categories'],
     queryFn:  productsService.getCategories,
+    staleTime: 10 * 60 * 1000,   // categorías cambian poco: 10 min
   });
   const categories = catData ?? [];
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isFetching } = useQuery({
     queryKey: ['products', { search, categoryId, activeFilter, page }],
     queryFn:  () => productsService.getAll({
       search:     search || undefined,
@@ -320,7 +470,8 @@ export default function ProductsPage() {
       page,
       limit: LIMIT,
     }),
-    placeholderData: (prev) => prev,
+    staleTime: 60_000,           // 1 min: suficiente para navegar sin recargar
+    placeholderData: (prev) => prev,  // muestra datos anteriores mientras carga el nuevo filtro
   });
 
   // Toggle activo/inactivo
@@ -330,8 +481,9 @@ export default function ProductsPage() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['products'] }),
   });
 
-  const openCreate = () => { setEditing(null); setProdModal(true); };
-  const openEdit   = (p: Product) => { setEditing(p); setProdModal(true); };
+  const openCreate  = () => { setEditing(null); setProdModal(true); };
+  const openEdit    = (p: Product) => { setEditing(p); setProdModal(true); };
+  const openBarcode = (p: Product) => { setBarcodeProduct(p); setBarcodeModal(true); };
 
   const products  = data?.data ?? [];
   const total     = data?.total ?? 0;
@@ -390,6 +542,9 @@ export default function ProductsPage() {
           <span className="text-sm text-slate-600">
             <strong>{total}</strong> producto(s) encontrado(s)
           </span>
+          {isFetching && !isLoading && (
+            <Spinner size="sm" className="ml-1 text-slate-400" />
+          )}
         </div>
 
         <div className="overflow-x-auto">
@@ -492,6 +647,13 @@ export default function ProductsPage() {
                         <td className="px-4 py-3">
                           <div className="flex items-center justify-center gap-1">
                             <button
+                              onClick={() => openBarcode(p)}
+                              className="p-1.5 rounded-lg hover:bg-violet-50 text-slate-400 hover:text-violet-600 transition-colors"
+                              title="Ver código de barras"
+                            >
+                              <Barcode size={15} />
+                            </button>
+                            <button
                               onClick={() => openEdit(p)}
                               className="p-1.5 rounded-lg hover:bg-blue-50 text-slate-400 hover:text-blue-600 transition-colors"
                               title="Editar"
@@ -558,6 +720,12 @@ export default function ProductsPage() {
         open={catModal}
         onClose={() => setCatModal(false)}
         categories={categories}
+      />
+
+      <BarcodeModal
+        open={barcodeModal}
+        onClose={() => { setBarcodeModal(false); setBarcodeProduct(null); }}
+        product={barcodeProduct}
       />
     </div>
   );

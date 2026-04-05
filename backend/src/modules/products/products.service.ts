@@ -54,9 +54,6 @@ export class ProductsService {
       businessId,
       ...(typeof isActive === 'boolean' && { isActive }),
       ...(categoryId && { categoryId }),
-      ...(lowStock && {
-        stockActual: { lte: this.prisma.product.fields.stockMinimo as any },
-      }),
       ...(search && {
         OR: [
           { nombre: { contains: search, mode: 'insensitive' } },
@@ -66,13 +63,16 @@ export class ProductsService {
       }),
     };
 
-    // lowStock: stock actual <= stock mínimo (raw comparison)
     const [items, total] = await Promise.all([
       this.prisma.product.findMany({
-        where: lowStock
-          ? { ...where, stockActual: { lte: this.prisma.product.fields.stockMinimo as any } }
-          : where,
-        include: { category: true },
+        where,
+        select: {
+          id: true, nombre: true, codigoInterno: true, codigoBarras: true,
+          descripcion: true, unidadMedida: true, precioCompra: true, precioVenta: true,
+          igvTipo: true, stockActual: true, stockMinimo: true, isActive: true,
+          imagenUrl: true, categoryId: true,
+          category: { select: { id: true, nombre: true } },
+        },
         orderBy: { nombre: 'asc' },
         skip,
         take: limit,
@@ -80,7 +80,7 @@ export class ProductsService {
       this.prisma.product.count({ where }),
     ]);
 
-    // filtro lowStock en JS (Prisma no soporta campo-vs-campo directamente en filtro)
+    // filtro lowStock en JS (Prisma no soporta campo-vs-campo directamente)
     const filtered = lowStock
       ? items.filter((p) => Number(p.stockActual) <= Number(p.stockMinimo))
       : items;

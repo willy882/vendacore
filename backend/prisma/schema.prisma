@@ -209,6 +209,11 @@ model Product {
   purchaseItems      PurchaseItem[]
   inventoryMovements InventoryMovement[]
 
+  @@index([businessId, isActive])
+  @@index([businessId, categoryId])
+  @@index([businessId, nombre])
+  @@index([codigoInterno])
+  @@index([codigoBarras])
   @@map("products")
 }
 
