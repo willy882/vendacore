@@ -1,9 +1,10 @@
 import axios, { AxiosError } from 'axios';
 import { useAuthStore } from '@/stores/auth.store';
 
-// En producción usa VITE_API_URL (ej: https://vendacore-api.railway.app/api/v1)
+// En producción apunta al backend en Railway
 // En desarrollo usa el proxy de Vite (/api/v1 → localhost:4000/api/v1)
-const BASE_URL = import.meta.env.VITE_API_URL || '/api/v1';
+const PROD_URL = 'https://backend-production-65fc.up.railway.app/api/v1';
+const BASE_URL = import.meta.env.DEV ? '/api/v1' : (import.meta.env.VITE_API_URL || PROD_URL);
 
 const api = axios.create({
   baseURL: BASE_URL,
@@ -45,7 +46,8 @@ api.interceptors.response.use(
     const store = useAuthStore.getState();
 
     try {
-      const { data } = await axios.post(`${BASE_URL}/auth/refresh`, {
+      const refreshURL = import.meta.env.DEV ? '/api/v1/auth/refresh' : `${BASE_URL}/auth/refresh`;
+      const { data } = await axios.post(refreshURL, {
         refreshToken: store.refreshToken,
       });
       const newToken: string = data.accessToken;
