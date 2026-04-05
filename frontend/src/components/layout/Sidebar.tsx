@@ -51,12 +51,12 @@ export function Sidebar({ onClose }: Props) {
   return (
     <aside className="flex flex-col h-full w-64 bg-slate-900 text-slate-100">
       {/* Logo */}
-      <div className="flex items-center gap-3 px-5 py-5 border-b border-slate-700/50">
-        <div className="w-8 h-8 rounded-lg bg-blue-600 flex items-center justify-center text-white font-bold text-sm flex-shrink-0">
-          V
+      <div className="flex items-center gap-3 px-4 py-4 border-b border-slate-700/50">
+        <div className="w-10 h-10 rounded-lg bg-white flex items-center justify-center flex-shrink-0 p-1">
+          <img src="/logo.png" alt="Ozzo Coffee" className="w-full h-full object-contain" />
         </div>
         <div>
-          <p className="text-sm font-bold text-white leading-none">VendaCore</p>
+          <p className="text-sm font-bold text-white leading-none">Ozzo Coffee</p>
           <p className="text-xs text-slate-400 mt-0.5 truncate max-w-[140px]">
             {user?.role?.name ?? 'Sistema'}
           </p>

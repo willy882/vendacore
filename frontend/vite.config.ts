@@ -12,6 +12,7 @@ export default defineConfig({
   },
   server: {
     port: 3000,
+    host: true,   // expone en la red local (0.0.0.0) — permite acceso desde celular
     proxy: {
       '/api': {
         target: 'http://localhost:4000',

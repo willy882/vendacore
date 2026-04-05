@@ -1,26 +1,46 @@
+import { lazy, Suspense } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { useAuthStore } from '@/stores/auth.store';
-import { AppLayout }      from '@/components/layout/AppLayout';
-import LoginPage          from '@/pages/LoginPage';
-import DashboardPage      from '@/pages/DashboardPage';
-import ProductsPage       from '@/pages/ProductsPage';
-import VentasPage         from '@/pages/VentasPage';
-import ClientesPage       from '@/pages/ClientesPage';
-import InventarioPage     from '@/pages/InventarioPage';
-import GastosPage         from '@/pages/GastosPage';
-import ProveedoresPage    from '@/pages/ProveedoresPage';
-import ComprasPage        from '@/pages/ComprasPage';
-import CajaPage           from '@/pages/CajaPage';
-import ReportesPage       from '@/pages/ReportesPage';
-import AuditoriaPage      from '@/pages/AuditoriaPage';
-import UsuariosPage       from '@/pages/UsuariosPage';
+import { AppLayout } from '@/components/layout/AppLayout';
+import { Spinner }   from '@/components/ui/Spinner';
 
+// ── Carga diferida: cada página es un chunk separado ──────────────────────────
+const LoginPage      = lazy(() => import('@/pages/LoginPage'));
+const DashboardPage  = lazy(() => import('@/pages/DashboardPage'));
+const VentasPage     = lazy(() => import('@/pages/VentasPage'));
+const ProductsPage   = lazy(() => import('@/pages/ProductsPage'));
+const InventarioPage = lazy(() => import('@/pages/InventarioPage'));
+const ClientesPage   = lazy(() => import('@/pages/ClientesPage'));
+const ProveedoresPage= lazy(() => import('@/pages/ProveedoresPage'));
+const ComprasPage    = lazy(() => import('@/pages/ComprasPage'));
+const GastosPage     = lazy(() => import('@/pages/GastosPage'));
+const CajaPage       = lazy(() => import('@/pages/CajaPage'));
+const ReportesPage   = lazy(() => import('@/pages/ReportesPage'));
+const AuditoriaPage  = lazy(() => import('@/pages/AuditoriaPage'));
+const UsuariosPage   = lazy(() => import('@/pages/UsuariosPage'));
+
+// ── QueryClient: caché agresivo para menos peticiones ─────────────────────────
 const queryClient = new QueryClient({
   defaultOptions: {
-    queries: { retry: 1, staleTime: 30_000 },
+    queries: {
+      retry: 1,
+      staleTime: 2 * 60 * 1000,       // datos frescos por 2 minutos
+      gcTime:    10 * 60 * 1000,       // mantiene caché 10 minutos
+      refetchOnWindowFocus: false,     // no refetch al cambiar ventana/tab
+      refetchOnReconnect: true,
+    },
   },
 });
+
+// ── Spinner de carga de página ─────────────────────────────────────────────────
+function PageLoader() {
+  return (
+    <div className="flex items-center justify-center h-64">
+      <Spinner size="lg" />
+    </div>
+  );
+}
 
 function PrivateRoute({ children }: { children: React.ReactNode }) {
   const isLoggedIn = useAuthStore((s) => s.isLoggedIn());
@@ -36,26 +56,28 @@ export default function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <BrowserRouter>
-        <Routes>
-          <Route path="/login" element={<PublicRoute><LoginPage /></PublicRoute>} />
+        <Suspense fallback={<PageLoader />}>
+          <Routes>
+            <Route path="/login" element={<PublicRoute><LoginPage /></PublicRoute>} />
 
-          <Route path="/" element={<PrivateRoute><AppLayout /></PrivateRoute>}>
-            <Route index               element={<DashboardPage />} />
-            <Route path="ventas"       element={<VentasPage />} />
-            <Route path="productos"    element={<ProductsPage />} />
-            <Route path="inventario"   element={<InventarioPage />} />
-            <Route path="clientes"     element={<ClientesPage />} />
-            <Route path="proveedores"  element={<ProveedoresPage />} />
-            <Route path="compras"      element={<ComprasPage />} />
-            <Route path="gastos"       element={<GastosPage />} />
-            <Route path="caja"         element={<CajaPage />} />
-            <Route path="reportes"     element={<ReportesPage />} />
-            <Route path="auditoria"    element={<AuditoriaPage />} />
-            <Route path="usuarios"     element={<UsuariosPage />} />
-          </Route>
+            <Route path="/" element={<PrivateRoute><AppLayout /></PrivateRoute>}>
+              <Route index              element={<DashboardPage />} />
+              <Route path="ventas"      element={<VentasPage />} />
+              <Route path="productos"   element={<ProductsPage />} />
+              <Route path="inventario"  element={<InventarioPage />} />
+              <Route path="clientes"    element={<ClientesPage />} />
+              <Route path="proveedores" element={<ProveedoresPage />} />
+              <Route path="compras"     element={<ComprasPage />} />
+              <Route path="gastos"      element={<GastosPage />} />
+              <Route path="caja"        element={<CajaPage />} />
+              <Route path="reportes"    element={<ReportesPage />} />
+              <Route path="auditoria"   element={<AuditoriaPage />} />
+              <Route path="usuarios"    element={<UsuariosPage />} />
+            </Route>
 
-          <Route path="*" element={<Navigate to="/" replace />} />
-        </Routes>
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Routes>
+        </Suspense>
       </BrowserRouter>
     </QueryClientProvider>
   );

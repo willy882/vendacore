@@ -43,15 +43,14 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-blue-950 to-slate-900 flex items-center justify-center p-4">
+    <div className="min-h-screen bg-gradient-to-br from-stone-900 via-amber-950 to-stone-900 flex items-center justify-center p-4">
       <div className="w-full max-w-md">
         {/* Logo */}
         <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-blue-600 shadow-lg mb-4">
-            <span className="text-white text-2xl font-bold">V</span>
+          <div className="inline-flex items-center justify-center w-32 h-32 rounded-2xl bg-white shadow-lg mb-2 p-2">
+            <img src="/logo.png" alt="Ozzo Coffee" className="w-full h-full object-contain" />
           </div>
-          <h1 className="text-2xl font-bold text-white">VendaCore</h1>
-          <p className="text-slate-400 text-sm mt-1">Sistema de Gestión Empresarial</p>
+          <p className="text-amber-300/70 text-sm mt-1">Sistema de Gestión</p>
         </div>
 
         {/* Card */}
@@ -106,8 +105,8 @@ export default function LoginPage() {
           </form>
         </div>
 
-        <p className="text-center text-slate-500 text-xs mt-6">
-          VendaCore © {new Date().getFullYear()} — Versión 1.0
+        <p className="text-center text-stone-500 text-xs mt-6">
+          Ozzo Coffee © {new Date().getFullYear()}
         </p>
       </div>
     </div>
