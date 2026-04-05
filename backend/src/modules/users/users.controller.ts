@@ -22,6 +22,18 @@ import { CurrentUser } from '../../common/decorators/current-user.decorator';
 export class UsersController {
   constructor(private usersService: UsersService) {}
 
+  /** GET /api/v1/users/me — Perfil propio */
+  @Get('me')
+  getMe(@CurrentUser() user: any) {
+    return this.usersService.findOne(user.id, user.businessId);
+  }
+
+  /** PATCH /api/v1/users/me — Actualizar perfil propio */
+  @Patch('me')
+  updateMe(@CurrentUser() user: any, @Body() dto: UpdateUserDto) {
+    return this.usersService.update(user.id, dto, user.businessId);
+  }
+
   /** GET /api/v1/users — Lista todos los usuarios del negocio */
   @Roles('administrador', 'supervisor')
   @Get()

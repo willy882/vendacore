@@ -32,6 +32,17 @@ export class ProductsController {
     return this.service.createCategory(dto, user.businessId);
   }
 
+  /** PUT /api/v1/products/categories/:id */
+  @Roles('administrador', 'supervisor')
+  @Put('categories/:id')
+  updateCategory(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: CreateCategoryDto,
+    @CurrentUser() user: any,
+  ) {
+    return this.service.updateCategory(id, dto, user.businessId);
+  }
+
   /** DELETE /api/v1/products/categories/:id */
   @Roles('administrador')
   @Delete('categories/:id')

@@ -33,6 +33,9 @@ export const productsService = {
   createCategory: (nombre: string, descripcion?: string) =>
     api.post<ProductCategory>('/products/categories', { nombre, descripcion }).then((r) => r.data),
 
+  updateCategory: (id: string, nombre: string, descripcion?: string) =>
+    api.put<ProductCategory>(`/products/categories/${id}`, { nombre, descripcion }).then((r) => r.data),
+
   deleteCategory: (id: string) =>
     api.delete(`/products/categories/${id}`),
 

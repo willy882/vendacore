@@ -34,6 +34,15 @@ export class ProductsService {
     });
   }
 
+  async updateCategory(id: string, dto: CreateCategoryDto, businessId: string) {
+    const cat = await this.prisma.productCategory.findFirst({ where: { id, businessId } });
+    if (!cat) throw new NotFoundException('Categoría no encontrada');
+    return this.prisma.productCategory.update({
+      where: { id },
+      data: { nombre: dto.nombre, descripcion: dto.descripcion },
+    });
+  }
+
   async deleteCategory(id: string, businessId: string) {
     const cat = await this.prisma.productCategory.findFirst({ where: { id, businessId } });
     if (!cat) throw new NotFoundException('Categoría no encontrada');

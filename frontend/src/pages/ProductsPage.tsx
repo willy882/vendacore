@@ -6,9 +6,10 @@ import { z } from 'zod';
 import {
   Plus, Search, Pencil, ToggleLeft, ToggleRight,
   AlertTriangle, Package, ChevronLeft, ChevronRight,
-  Tag, Trash2, RefreshCw, Barcode, Download, Printer,
+  Tag, Trash2, RefreshCw, Barcode, Download, Printer, Check, X, QrCode,
 } from 'lucide-react';
 import JsBarcode from 'jsbarcode';
+import QRCode from 'qrcode';
 
 import { productsService } from '@/services/products.service';
 import { Card } from '@/components/ui/Card';
@@ -56,40 +57,57 @@ function generateEAN13(): string {
   return raw + check;
 }
 
-// ── Modal de código de barras ─────────────────────────────────────────────────
+// ── Modal de código de barras / QR ───────────────────────────────────────────
 
 function BarcodeModal({ open, onClose, product }: {
   open: boolean; onClose: () => void; product: Product | null;
 }) {
-  const svgRef  = useRef<SVGSVGElement>(null);
+  const svgRef    = useRef<SVGSVGElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [tab, setTab] = useState<'barcode' | 'qr'>('barcode');
   const [qty, setQty] = useState(1);
-  const code = product?.codigoBarras ?? product?.codigoInterno ?? '';
 
+  // El código que se usa: codigoBarras → codigoInterno → id del producto
+  const code = product?.codigoBarras ?? product?.codigoInterno ?? product?.id ?? '';
+  // QR siempre usa el mismo valor que está guardado → determinístico por producto
+  const qrValue = product?.codigoBarras ?? product?.codigoInterno ?? product?.id ?? '';
+
+  // Barcode 1D
   useEffect(() => {
-    if (!open || !svgRef.current || !code) return;
+    if (!open || tab !== 'barcode' || !svgRef.current || !code) return;
     try {
       JsBarcode(svgRef.current, code, {
-        format:      'CODE128',
-        width:       2,
-        height:      80,
+        format:       'CODE128',
+        width:        2,
+        height:       80,
         displayValue: true,
-        fontSize:    14,
-        margin:      10,
-        background:  '#ffffff',
-        lineColor:   '#000000',
+        fontSize:     14,
+        margin:       10,
+        background:   '#ffffff',
+        lineColor:    '#000000',
       });
     } catch { /* código inválido */ }
-  }, [open, code]);
+  }, [open, tab, code]);
 
-  const downloadPNG = useCallback(() => {
+  // QR 2D — siempre la misma cadena → mismo QR para el mismo producto
+  useEffect(() => {
+    if (!open || tab !== 'qr' || !canvasRef.current || !qrValue) return;
+    QRCode.toCanvas(canvasRef.current, qrValue, {
+      width:          220,
+      margin:         2,
+      color:          { dark: '#0f172a', light: '#ffffff' },
+      errorCorrectionLevel: 'M',
+    }).catch(() => {/* error */ });
+  }, [open, tab, qrValue]);
+
+  const downloadBarcodePNG = useCallback(() => {
     if (!svgRef.current) return;
-    const svg    = svgRef.current;
-    const xml    = new XMLSerializer().serializeToString(svg);
-    const blob   = new Blob([xml], { type: 'image/svg+xml' });
-    const url    = URL.createObjectURL(blob);
-    // Convertir SVG → Canvas → PNG
-    const img    = new Image();
-    img.onload   = () => {
+    const svg  = svgRef.current;
+    const xml  = new XMLSerializer().serializeToString(svg);
+    const blob = new Blob([xml], { type: 'image/svg+xml' });
+    const url  = URL.createObjectURL(blob);
+    const img  = new Image();
+    img.onload = () => {
       const canvas = document.createElement('canvas');
       canvas.width  = svg.width.baseVal.value * 2;
       canvas.height = svg.height.baseVal.value * 2;
@@ -105,11 +123,25 @@ function BarcodeModal({ open, onClose, product }: {
     img.src = url;
   }, [code]);
 
+  const downloadQRPNG = useCallback(() => {
+    if (!canvasRef.current) return;
+    const a = document.createElement('a');
+    a.href     = canvasRef.current.toDataURL('image/png');
+    a.download = `qr-${product?.nombre ?? qrValue}.png`;
+    a.click();
+  }, [qrValue, product]);
+
   const printLabels = useCallback(() => {
-    if (!svgRef.current) return;
-    const xml  = new XMLSerializer().serializeToString(svgRef.current);
-    const b64  = btoa(unescape(encodeURIComponent(xml)));
-    const labelHtml = `<img src="data:image/svg+xml;base64,${b64}" style="width:180px;display:block"/>
+    const isQR = tab === 'qr';
+    let imgData = '';
+    if (isQR) {
+      imgData = canvasRef.current?.toDataURL('image/png') ?? '';
+    } else {
+      if (!svgRef.current) return;
+      const xml = new XMLSerializer().serializeToString(svgRef.current);
+      imgData = `data:image/svg+xml;base64,${btoa(unescape(encodeURIComponent(xml)))}`;
+    }
+    const labelHtml = `<img src="${imgData}" style="width:${isQR ? '120px' : '180px'};display:block"/>
       <p style="font-size:11px;text-align:center;margin:2px 0 0;font-family:sans-serif">${product?.nombre ?? ''}</p>`;
     const grid = Array.from({ length: qty }, () =>
       `<div style="display:inline-block;border:1px dashed #ccc;padding:6px;margin:4px;vertical-align:top">${labelHtml}</div>`
@@ -120,22 +152,48 @@ function BarcodeModal({ open, onClose, product }: {
       <style>body{margin:16px;font-family:sans-serif}@media print{body{margin:0}}</style></head>
       <body><div>${grid}</div><script>window.onload=()=>{window.print();window.close()}<\/script></body></html>`);
     win.document.close();
-  }, [code, qty, product]);
+  }, [tab, code, qty, product]);
 
   if (!product) return null;
 
+  const hasCode = !!code;
+
   return (
-    <Modal open={open} onClose={onClose} title="Código de barras" size="sm">
+    <Modal open={open} onClose={onClose} title="Código de producto" size="sm">
+      {/* Tabs */}
+      <div className="flex border border-slate-200 rounded-lg overflow-hidden mb-4">
+        <button
+          onClick={() => setTab('barcode')}
+          className={`flex-1 flex items-center justify-center gap-2 py-2 text-sm font-medium transition-colors ${
+            tab === 'barcode' ? 'bg-blue-600 text-white' : 'bg-white text-slate-600 hover:bg-slate-50'
+          }`}
+        >
+          <Barcode size={15} /> Código de barras
+        </button>
+        <button
+          onClick={() => setTab('qr')}
+          className={`flex-1 flex items-center justify-center gap-2 py-2 text-sm font-medium transition-colors ${
+            tab === 'qr' ? 'bg-blue-600 text-white' : 'bg-white text-slate-600 hover:bg-slate-50'
+          }`}
+        >
+          <QrCode size={15} /> Código QR
+        </button>
+      </div>
+
       <div className="flex flex-col items-center gap-4">
-        {code ? (
+        {hasCode ? (
           <>
-            <div className="bg-white border border-slate-200 rounded-xl p-4 w-full flex justify-center">
-              <svg ref={svgRef} />
+            <div className="bg-white border border-slate-200 rounded-xl p-4 w-full flex justify-center min-h-[120px] items-center">
+              {tab === 'barcode' ? (
+                <svg ref={svgRef} />
+              ) : (
+                <canvas ref={canvasRef} />
+              )}
             </div>
 
             <p className="text-sm text-slate-600 text-center font-medium">{product.nombre}</p>
+            <p className="text-xs text-slate-400 font-mono">{code}</p>
 
-            {/* Cantidad de etiquetas */}
             <div className="flex items-center gap-3 w-full">
               <label className="text-sm text-slate-600 whitespace-nowrap">Cantidad de etiquetas:</label>
               <input
@@ -146,7 +204,12 @@ function BarcodeModal({ open, onClose, product }: {
             </div>
 
             <div className="flex gap-2 w-full">
-              <Button variant="outline" icon={<Download size={15} />} onClick={downloadPNG} className="flex-1">
+              <Button
+                variant="outline"
+                icon={<Download size={15} />}
+                onClick={tab === 'barcode' ? downloadBarcodePNG : downloadQRPNG}
+                className="flex-1"
+              >
                 Descargar PNG
               </Button>
               <Button icon={<Printer size={15} />} onClick={printLabels} className="flex-1">
@@ -156,7 +219,7 @@ function BarcodeModal({ open, onClose, product }: {
           </>
         ) : (
           <div className="py-8 text-center text-slate-400 text-sm">
-            Este producto no tiene código de barras asignado.
+            Este producto no tiene código asignado.
           </div>
         )}
       </div>
@@ -370,7 +433,9 @@ function CategoriesModal({ open, onClose, categories }: {
 }) {
   const qc = useQueryClient();
   const [nombre, setNombre] = useState('');
-  const [err, setErr] = useState('');
+  const [err, setErr]       = useState('');
+  const [editId, setEditId] = useState<string | null>(null);
+  const [editVal, setEditVal] = useState('');
   const canEdit = useAuthStore((s) => s.hasRoles(['administrador', 'supervisor', 'almacenero']));
   const isAdmin = useAuthStore((s) => s.hasRole('administrador'));
 
@@ -380,10 +445,18 @@ function CategoriesModal({ open, onClose, categories }: {
     onError:    (e: any) => setErr(e?.response?.data?.message ?? 'Error al crear'),
   });
 
+  const updateMut = useMutation({
+    mutationFn: ({ id, n }: { id: string; n: string }) => productsService.updateCategory(id, n),
+    onSuccess:  () => { qc.invalidateQueries({ queryKey: ['categories'] }); setEditId(null); },
+  });
+
   const deleteMut = useMutation({
     mutationFn: (id: string) => productsService.deleteCategory(id),
     onSuccess:  () => qc.invalidateQueries({ queryKey: ['categories'] }),
+    onError:    (e: any) => alert(e?.response?.data?.message ?? 'No se puede eliminar'),
   });
+
+  const startEdit = (c: ProductCategory) => { setEditId(c.id); setEditVal(c.nombre); };
 
   return (
     <Modal open={open} onClose={onClose} title="Categorías de Producto" size="sm">
@@ -393,6 +466,7 @@ function CategoriesModal({ open, onClose, categories }: {
             placeholder="Nueva categoría..."
             value={nombre}
             onChange={(e) => setNombre(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && nombre.trim() && createMut.mutate()}
             error={err}
           />
           <Button
@@ -406,26 +480,65 @@ function CategoriesModal({ open, onClose, categories }: {
         </div>
       )}
 
-      <ul className="space-y-1.5">
+      <ul className="space-y-1.5 max-h-72 overflow-y-auto">
         {categories.map((c) => (
-          <li key={c.id} className="flex items-center justify-between px-3 py-2 rounded-lg bg-slate-50 border border-slate-100">
-            <div className="flex items-center gap-2 text-sm text-slate-700">
-              <Tag size={14} className="text-slate-400" />
-              {c.nombre}
-            </div>
-            {isAdmin && (
-              <button
-                onClick={() => deleteMut.mutate(c.id)}
-                className="p-1 rounded hover:bg-red-50 text-slate-400 hover:text-red-500 transition-colors"
-                title="Eliminar categoría"
-              >
-                <Trash2 size={14} />
-              </button>
+          <li key={c.id} className="flex items-center gap-2 px-3 py-2 rounded-lg bg-slate-50 border border-slate-100">
+            <Tag size={14} className="text-slate-400 flex-shrink-0" />
+
+            {editId === c.id ? (
+              <>
+                <input
+                  autoFocus
+                  value={editVal}
+                  onChange={(e) => setEditVal(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && editVal.trim()) updateMut.mutate({ id: c.id, n: editVal.trim() });
+                    if (e.key === 'Escape') setEditId(null);
+                  }}
+                  className="flex-1 text-sm px-2 py-1 border border-blue-400 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+                <button
+                  onClick={() => editVal.trim() && updateMut.mutate({ id: c.id, n: editVal.trim() })}
+                  className="p-1 rounded hover:bg-green-50 text-green-600"
+                  title="Guardar"
+                >
+                  <Check size={14} />
+                </button>
+                <button
+                  onClick={() => setEditId(null)}
+                  className="p-1 rounded hover:bg-slate-200 text-slate-400"
+                  title="Cancelar"
+                >
+                  <X size={14} />
+                </button>
+              </>
+            ) : (
+              <>
+                <span className="flex-1 text-sm text-slate-700">{c.nombre}</span>
+                {canEdit && (
+                  <button
+                    onClick={() => startEdit(c)}
+                    className="p-1 rounded hover:bg-blue-50 text-slate-400 hover:text-blue-600 transition-colors"
+                    title="Editar"
+                  >
+                    <Pencil size={13} />
+                  </button>
+                )}
+                {isAdmin && (
+                  <button
+                    onClick={() => deleteMut.mutate(c.id)}
+                    className="p-1 rounded hover:bg-red-50 text-slate-400 hover:text-red-500 transition-colors"
+                    title="Eliminar categoría"
+                  >
+                    <Trash2 size={13} />
+                  </button>
+                )}
+              </>
             )}
           </li>
         ))}
         {categories.length === 0 && (
-          <p className="text-sm text-slate-400 text-center py-4">Sin categorías</p>
+          <p className="text-sm text-slate-400 text-center py-4">Sin categorías — agrega la primera</p>
         )}
       </ul>
     </Modal>
