@@ -1,10 +1,9 @@
 import axios, { AxiosError } from 'axios';
 import { useAuthStore } from '@/stores/auth.store';
 
-// En producción apunta al backend en Railway
-// En desarrollo usa el proxy de Vite (/api/v1 → localhost:4000/api/v1)
+// build:2026-04-05
 const PROD_URL = 'https://backend-production-65fc.up.railway.app/api/v1';
-const BASE_URL = import.meta.env.DEV ? '/api/v1' : (import.meta.env.VITE_API_URL || PROD_URL);
+const BASE_URL = import.meta.env.DEV ? '/api/v1' : PROD_URL;
 
 const api = axios.create({
   baseURL: BASE_URL,
