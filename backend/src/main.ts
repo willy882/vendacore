@@ -12,9 +12,20 @@ async function bootstrap() {
   // Prefijo global de API
   app.setGlobalPrefix('api/v1');
 
-  // CORS
+  // CORS — soporta múltiples orígenes separados por coma
+  const allowedOrigins = (process.env.CORS_ORIGIN || 'http://localhost:3000')
+    .split(',')
+    .map((o) => o.trim());
+
   app.enableCors({
-    origin: process.env.CORS_ORIGIN || 'http://localhost:3000',
+    origin: (origin, callback) => {
+      // Permitir requests sin origen (apps móviles, Postman, curl)
+      if (!origin || allowedOrigins.includes(origin)) {
+        callback(null, true);
+      } else {
+        callback(new Error(`CORS: origen no permitido: ${origin}`));
+      }
+    },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization'],

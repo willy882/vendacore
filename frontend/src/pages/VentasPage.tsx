@@ -1,0 +1,544 @@
+import { useState, useCallback } from 'react';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import {
+  Search, Plus, Minus, Trash2, ShoppingCart,
+  User, CreditCard, CheckCircle, X, Package,
+} from 'lucide-react';
+import { productsService } from '@/services/products.service';
+import { salesService } from '@/services/sales.service';
+import { customersService } from '@/services/customers.service';
+import { cashService } from '@/services/cash.service';
+import { Button } from '@/components/ui/Button';
+import { Input } from '@/components/ui/Input';
+import { Select } from '@/components/ui/Select';
+import { Badge } from '@/components/ui/Badge';
+import { Modal } from '@/components/ui/Modal';
+import { Spinner } from '@/components/ui/Spinner';
+import { formatCurrency, formatNumber } from '@/lib/utils';
+import type { Product, Customer } from '@/types';
+
+// ─── Tipos internos ───────────────────────────────────────────────────────────
+
+interface CartItem {
+  product:       Product;
+  cantidad:      number;
+  precioUnitario: number;
+  descuento:     number;
+}
+
+interface PaymentLine {
+  methodId: string;
+  nombre:   string;
+  monto:    string;
+}
+
+const IGV_RATE = 0.18;
+
+function calcIgv(product: Product, subtotal: number) {
+  return product.igvTipo === 'gravado' ? subtotal * IGV_RATE : 0;
+}
+
+// ─── Componente producto card ─────────────────────────────────────────────────
+
+function ProductCard({ product, onAdd }: { product: Product; onAdd: (p: Product) => void }) {
+  const sinStock = Number(product.stockActual) <= 0;
+  return (
+    <button
+      disabled={sinStock}
+      onClick={() => onAdd(product)}
+      className="text-left p-3 rounded-xl border border-slate-200 bg-white hover:border-blue-400 hover:shadow-sm transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+    >
+      <p className="text-xs text-slate-500 font-mono">{product.codigoInterno ?? '—'}</p>
+      <p className="text-sm font-semibold text-slate-800 mt-0.5 line-clamp-2">{product.nombre}</p>
+      <div className="flex justify-between items-center mt-2">
+        <span className="text-blue-700 font-bold text-sm">{formatCurrency(Number(product.precioVenta))}</span>
+        <Badge variant={sinStock ? 'danger' : Number(product.stockActual) <= Number(product.stockMinimo) ? 'warning' : 'success'}>
+          {formatNumber(Number(product.stockActual))} {product.unidadMedida ?? ''}
+        </Badge>
+      </div>
+    </button>
+  );
+}
+
+// ─── Modal de confirmación de pago ───────────────────────────────────────────
+
+interface PayModalProps {
+  open:          boolean;
+  onClose:       () => void;
+  total:         number;
+  paymentMethods: { id: string; nombre: string }[];
+  onConfirm:     (payments: PaymentLine[], tipoVenta: 'contado' | 'credito') => void;
+  loading:       boolean;
+}
+
+function PayModal({ open, onClose, total, paymentMethods, onConfirm, loading }: PayModalProps) {
+  const [tipoVenta, setTipoVenta] = useState<'contado' | 'credito'>('contado');
+  const [payments, setPayments]   = useState<PaymentLine[]>([]);
+
+  const addLine = () => {
+    if (paymentMethods.length === 0) return;
+    const m = paymentMethods[0];
+    setPayments((p) => [...p, { methodId: m.id, nombre: m.nombre, monto: '' }]);
+  };
+
+  const updateLine = (i: number, field: keyof PaymentLine, value: string) => {
+    setPayments((p) => {
+      const copy = [...p];
+      if (field === 'methodId') {
+        const m = paymentMethods.find((m) => m.id === value);
+        copy[i] = { ...copy[i], methodId: value, nombre: m?.nombre ?? '' };
+      } else {
+        (copy[i] as any)[field] = value;
+      }
+      return copy;
+    });
+  };
+
+  const removeLine = (i: number) => setPayments((p) => p.filter((_, idx) => idx !== i));
+
+  const totalPagado = payments.reduce((a, p) => a + (parseFloat(p.monto) || 0), 0);
+  const vuelto      = totalPagado - total;
+  const canPay      = tipoVenta === 'credito' || (payments.length > 0 && totalPagado >= total);
+
+  const handleConfirm = () => {
+    if (!canPay) return;
+    onConfirm(payments, tipoVenta);
+  };
+
+  const methodOptions = paymentMethods.map((m) => ({ value: m.id, label: m.nombre }));
+
+  return (
+    <Modal
+      open={open}
+      onClose={onClose}
+      title="Procesar Pago"
+      size="md"
+      footer={
+        <>
+          <Button variant="outline" onClick={onClose}>Cancelar</Button>
+          <Button onClick={handleConfirm} loading={loading} disabled={!canPay} icon={<CheckCircle size={16} />}>
+            Confirmar Venta
+          </Button>
+        </>
+      }
+    >
+      <div className="space-y-4">
+        <div className="flex gap-3">
+          <button
+            onClick={() => setTipoVenta('contado')}
+            className={`flex-1 py-2.5 rounded-lg border text-sm font-medium transition-colors ${
+              tipoVenta === 'contado' ? 'bg-blue-600 border-blue-600 text-white' : 'border-slate-300 text-slate-600 hover:bg-slate-50'
+            }`}
+          >
+            Contado
+          </button>
+          <button
+            onClick={() => setTipoVenta('credito')}
+            className={`flex-1 py-2.5 rounded-lg border text-sm font-medium transition-colors ${
+              tipoVenta === 'credito' ? 'bg-blue-600 border-blue-600 text-white' : 'border-slate-300 text-slate-600 hover:bg-slate-50'
+            }`}
+          >
+            Crédito
+          </button>
+        </div>
+
+        <div className="bg-blue-50 rounded-xl p-4 text-center">
+          <p className="text-xs text-slate-500 mb-1">Total a cobrar</p>
+          <p className="text-3xl font-bold text-blue-700">{formatCurrency(total)}</p>
+        </div>
+
+        {tipoVenta === 'contado' && (
+          <>
+            <div className="space-y-2">
+              {payments.map((p, i) => (
+                <div key={i} className="flex gap-2 items-center">
+                  <Select
+                    options={methodOptions}
+                    value={p.methodId}
+                    onChange={(e) => updateLine(i, 'methodId', e.target.value)}
+                    className="flex-1"
+                  />
+                  <Input
+                    type="number" step="0.01" min="0"
+                    placeholder="Monto"
+                    value={p.monto}
+                    onChange={(e) => updateLine(i, 'monto', e.target.value)}
+                    className="w-32"
+                  />
+                  <button onClick={() => removeLine(i)} className="p-2 text-slate-400 hover:text-red-500">
+                    <X size={16} />
+                  </button>
+                </div>
+              ))}
+            </div>
+            <Button variant="outline" size="sm" icon={<Plus size={14} />} onClick={addLine} fullWidth>
+              Agregar método de pago
+            </Button>
+
+            {payments.length > 0 && (
+              <div className="border-t pt-3 space-y-1 text-sm">
+                <div className="flex justify-between text-slate-600">
+                  <span>Recibido:</span>
+                  <span className="font-medium">{formatCurrency(totalPagado)}</span>
+                </div>
+                <div className={`flex justify-between font-semibold ${vuelto >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>
+                  <span>Vuelto / Faltante:</span>
+                  <span>{formatCurrency(Math.abs(vuelto))}</span>
+                </div>
+              </div>
+            )}
+          </>
+        )}
+
+        {tipoVenta === 'credito' && (
+          <div className="rounded-lg bg-amber-50 border border-amber-200 p-3 text-sm text-amber-800">
+            La venta quedará pendiente de cobro. Se registrará en el crédito del cliente.
+          </div>
+        )}
+      </div>
+    </Modal>
+  );
+}
+
+// ─── Modal selección cliente ──────────────────────────────────────────────────
+
+function CustomerModal({ open, onClose, onSelect }: {
+  open: boolean; onClose: () => void; onSelect: (c: Customer | null) => void;
+}) {
+  const [search, setSearch] = useState('');
+  const { data, isLoading } = useQuery({
+    queryKey: ['customers-search', search],
+    queryFn:  () => customersService.getAll({ search, limit: 20 }),
+    enabled:  open,
+  });
+
+  return (
+    <Modal open={open} onClose={onClose} title="Seleccionar Cliente" size="md">
+      <div className="space-y-3">
+        <Input
+          placeholder="Buscar por nombre o documento..."
+          icon={<Search size={15} />}
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          autoFocus
+        />
+        <button
+          onClick={() => { onSelect(null); onClose(); }}
+          className="w-full text-left px-3 py-2.5 rounded-lg border border-slate-200 hover:bg-slate-50 text-sm text-slate-600 flex items-center gap-2"
+        >
+          <User size={15} className="text-slate-400" />
+          Consumidor Final
+        </button>
+
+        {isLoading ? (
+          <div className="flex justify-center py-6"><Spinner /></div>
+        ) : (
+          <div className="space-y-1 max-h-64 overflow-y-auto">
+            {data?.data.map((c) => (
+              <button
+                key={c.id}
+                onClick={() => { onSelect(c); onClose(); }}
+                className="w-full text-left px-3 py-2.5 rounded-lg hover:bg-blue-50 border border-transparent hover:border-blue-200 transition-colors"
+              >
+                <p className="text-sm font-medium text-slate-800">{c.nombreCompleto}</p>
+                <p className="text-xs text-slate-500">{c.tipoDocumento}: {c.numeroDocumento}</p>
+              </button>
+            ))}
+            {data?.data.length === 0 && (
+              <p className="text-sm text-slate-400 text-center py-4">Sin resultados</p>
+            )}
+          </div>
+        )}
+      </div>
+    </Modal>
+  );
+}
+
+// ─── Página principal ─────────────────────────────────────────────────────────
+
+export default function VentasPage() {
+  const qc = useQueryClient();
+
+  // Estado del carrito
+  const [cart, setCart]         = useState<CartItem[]>([]);
+  const [customer, setCustomer] = useState<Customer | null>(null);
+  const [search, setSearch]     = useState('');
+  const [catFilter, setCatFilter] = useState('');
+
+  // Modales
+  const [payModal, setPayModal]  = useState(false);
+  const [custModal, setCustModal] = useState(false);
+  const [successSale, setSuccessSale] = useState<string | null>(null);
+
+  // Queries
+  const { data: products, isLoading: loadingProducts } = useQuery({
+    queryKey: ['products', { search, categoryId: catFilter, isActive: true }],
+    queryFn:  () => productsService.getAll({ search, categoryId: catFilter || undefined, isActive: true, limit: 60 }),
+    placeholderData: (p) => p,
+  });
+
+  const { data: categories } = useQuery({
+    queryKey: ['categories'],
+    queryFn:  productsService.getCategories,
+  });
+
+  const { data: activeSession } = useQuery({
+    queryKey: ['cash-active'],
+    queryFn:  cashService.getActive,
+  });
+
+  const { data: payMethods } = useQuery({
+    queryKey: ['payment-methods'],
+    queryFn:  () => salesService.getPaymentMethods(),
+  });
+
+  // Mutation crear venta
+  const createMut = useMutation({
+    mutationFn: salesService.create,
+    onSuccess: (sale) => {
+      setCart([]);
+      setCustomer(null);
+      setPayModal(false);
+      setSuccessSale(sale.id);
+      qc.invalidateQueries({ queryKey: ['products'] });
+      qc.invalidateQueries({ queryKey: ['dashboard'] });
+    },
+  });
+
+  // Carrito helpers
+  const addToCart = useCallback((product: Product) => {
+    setCart((prev) => {
+      const existing = prev.findIndex((i) => i.product.id === product.id);
+      if (existing >= 0) {
+        const copy = [...prev];
+        const maxQty = Number(product.stockActual);
+        copy[existing] = {
+          ...copy[existing],
+          cantidad: Math.min(copy[existing].cantidad + 1, maxQty),
+        };
+        return copy;
+      }
+      return [...prev, { product, cantidad: 1, precioUnitario: Number(product.precioVenta), descuento: 0 }];
+    });
+  }, []);
+
+  const updateQty = (idx: number, delta: number) => {
+    setCart((prev) => {
+      const copy = [...prev];
+      const item = copy[idx];
+      const newQty = item.cantidad + delta;
+      if (newQty <= 0) return prev.filter((_, i) => i !== idx);
+      const maxQty = Number(item.product.stockActual);
+      copy[idx] = { ...item, cantidad: Math.min(newQty, maxQty) };
+      return copy;
+    });
+  };
+
+  const removeItem = (idx: number) => setCart((p) => p.filter((_, i) => i !== idx));
+  const clearCart  = () => { setCart([]); setCustomer(null); };
+
+  // Totales
+  const subtotalSinIgv = cart.reduce((a, i) => {
+    const sub = i.cantidad * i.precioUnitario * (1 - i.descuento / 100);
+    return a + (i.product.igvTipo === 'gravado' ? sub / (1 + IGV_RATE) : sub);
+  }, 0);
+  const igvTotal = cart.reduce((a, i) => {
+    const sub = i.cantidad * i.precioUnitario * (1 - i.descuento / 100);
+    return a + calcIgv(i.product, i.product.igvTipo === 'gravado' ? sub / (1 + IGV_RATE) : sub);
+  }, 0);
+  const total = cart.reduce((a, i) => a + i.cantidad * i.precioUnitario * (1 - i.descuento / 100), 0);
+
+  const handleConfirmPay = (payments: PaymentLine[], tipoVenta: 'contado' | 'credito') => {
+    createMut.mutate({
+      customerId:    customer?.id,
+      cashSessionId: activeSession?.id,
+      tipoVenta,
+      items: cart.map((i) => ({
+        productId:      i.product.id,
+        cantidad:       i.cantidad,
+        precioUnitario: i.precioUnitario,
+        descuento:      i.descuento,
+      })),
+      payments: tipoVenta === 'contado'
+        ? payments.filter((p) => parseFloat(p.monto) > 0).map((p) => ({
+            paymentMethodId: p.methodId,
+            monto:           parseFloat(p.monto),
+          }))
+        : [],
+    });
+  };
+
+  const catOptions = [
+    { value: '', label: 'Todas' },
+    ...(categories ?? []).map((c) => ({ value: c.id, label: c.nombre })),
+  ];
+
+  return (
+    <div className="flex gap-4 h-[calc(100vh-8rem)]">
+      {/* ── Columna izquierda: productos ──────────────────────────────── */}
+      <div className="flex flex-col flex-1 min-w-0 gap-3">
+        {/* Buscador */}
+        <div className="flex gap-2">
+          <Input
+            placeholder="Buscar producto o código..."
+            icon={<Search size={15} />}
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="flex-1"
+          />
+          <Select
+            options={catOptions}
+            value={catFilter}
+            onChange={(e) => setCatFilter(e.target.value)}
+            className="w-40"
+          />
+        </div>
+
+        {/* Grid de productos */}
+        <div className="flex-1 overflow-y-auto">
+          {loadingProducts ? (
+            <div className="flex justify-center py-12"><Spinner size="lg" /></div>
+          ) : (
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-2">
+              {products?.data.map((p) => (
+                <ProductCard key={p.id} product={p} onAdd={addToCart} />
+              ))}
+              {products?.data.length === 0 && (
+                <div className="col-span-full flex flex-col items-center py-16 text-slate-400 gap-2">
+                  <Package size={32} />
+                  <p className="text-sm">Sin productos encontrados</p>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* ── Columna derecha: carrito ───────────────────────────────────── */}
+      <div className="w-80 flex flex-col bg-white rounded-2xl border border-slate-200 shadow-sm flex-shrink-0">
+        {/* Header carrito */}
+        <div className="flex items-center justify-between px-4 py-3 border-b border-slate-100">
+          <div className="flex items-center gap-2 text-slate-700 font-semibold text-sm">
+            <ShoppingCart size={16} />
+            Venta actual
+          </div>
+          {cart.length > 0 && (
+            <button onClick={clearCart} className="text-xs text-red-500 hover:text-red-700">
+              Limpiar
+            </button>
+          )}
+        </div>
+
+        {/* Cliente */}
+        <button
+          onClick={() => setCustModal(true)}
+          className="flex items-center gap-2 mx-3 mt-3 px-3 py-2 rounded-lg border border-dashed border-slate-300 hover:border-blue-400 hover:bg-blue-50 transition-colors text-sm"
+        >
+          <User size={15} className="text-slate-400" />
+          <span className={customer ? 'text-slate-800 font-medium' : 'text-slate-400'}>
+            {customer ? customer.nombreCompleto : 'Consumidor Final'}
+          </span>
+        </button>
+
+        {/* Items */}
+        <div className="flex-1 overflow-y-auto px-3 py-2 space-y-2">
+          {cart.length === 0 ? (
+            <div className="flex flex-col items-center justify-center h-32 text-slate-300 gap-2">
+              <ShoppingCart size={28} />
+              <p className="text-xs">El carrito está vacío</p>
+            </div>
+          ) : (
+            cart.map((item, idx) => (
+              <div key={item.product.id} className="flex gap-2 p-2 rounded-lg bg-slate-50 border border-slate-100">
+                <div className="flex-1 min-w-0">
+                  <p className="text-xs font-medium text-slate-800 line-clamp-2">{item.product.nombre}</p>
+                  <p className="text-xs text-blue-600 font-semibold mt-0.5">
+                    {formatCurrency(item.precioUnitario)}
+                  </p>
+                </div>
+                <div className="flex flex-col items-end gap-1">
+                  <button onClick={() => removeItem(idx)} className="text-slate-300 hover:text-red-400">
+                    <Trash2 size={12} />
+                  </button>
+                  <div className="flex items-center gap-1">
+                    <button onClick={() => updateQty(idx, -1)} className="w-5 h-5 rounded flex items-center justify-center bg-slate-200 hover:bg-slate-300 text-slate-700">
+                      <Minus size={10} />
+                    </button>
+                    <span className="text-xs font-bold text-slate-800 w-6 text-center">{item.cantidad}</span>
+                    <button onClick={() => updateQty(idx, 1)} className="w-5 h-5 rounded flex items-center justify-center bg-blue-100 hover:bg-blue-200 text-blue-700">
+                      <Plus size={10} />
+                    </button>
+                  </div>
+                  <p className="text-xs font-semibold text-slate-700">
+                    {formatCurrency(item.cantidad * item.precioUnitario)}
+                  </p>
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+
+        {/* Totales */}
+        <div className="border-t border-slate-100 px-4 py-3 space-y-1 text-xs text-slate-500">
+          <div className="flex justify-between">
+            <span>Subtotal</span>
+            <span>{formatCurrency(subtotalSinIgv)}</span>
+          </div>
+          <div className="flex justify-between">
+            <span>IGV (18%)</span>
+            <span>{formatCurrency(igvTotal)}</span>
+          </div>
+          <div className="flex justify-between text-base font-bold text-slate-800 pt-1 border-t border-slate-100">
+            <span>Total</span>
+            <span className="text-blue-700">{formatCurrency(total)}</span>
+          </div>
+        </div>
+
+        {/* Botón pagar */}
+        <div className="px-3 pb-4">
+          <Button
+            fullWidth
+            size="lg"
+            icon={<CreditCard size={17} />}
+            disabled={cart.length === 0}
+            onClick={() => setPayModal(true)}
+          >
+            Cobrar
+          </Button>
+        </div>
+      </div>
+
+      {/* ── Modales ───────────────────────────────────────────────────── */}
+      <PayModal
+        open={payModal}
+        onClose={() => setPayModal(false)}
+        total={total}
+        paymentMethods={payMethods ?? []}
+        onConfirm={handleConfirmPay}
+        loading={createMut.isPending}
+      />
+
+      <CustomerModal
+        open={custModal}
+        onClose={() => setCustModal(false)}
+        onSelect={setCustomer}
+      />
+
+      {/* Venta exitosa */}
+      <Modal
+        open={!!successSale}
+        onClose={() => setSuccessSale(null)}
+        title="¡Venta registrada!"
+        size="sm"
+        footer={<Button onClick={() => setSuccessSale(null)}>Nueva venta</Button>}
+      >
+        <div className="flex flex-col items-center gap-3 py-4">
+          <CheckCircle size={48} className="text-emerald-500" />
+          <p className="text-sm text-slate-600 text-center">
+            La venta fue procesada correctamente.
+          </p>
+        </div>
+      </Modal>
+    </div>
+  );
+}
