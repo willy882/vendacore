@@ -5,14 +5,15 @@ COPY package*.json ./
 RUN npm ci
 
 COPY prisma ./prisma
-COPY prisma.config.ts ./
 COPY tsconfig.json nest-cli.json ./
 COPY src ./src
 
-RUN npx prisma generate --config prisma.config.ts
+# URL de placeholder para prisma generate en build (Render inyecta la real al correr)
+ENV DATABASE_URL=postgresql://placeholder:placeholder@localhost:5432/placeholder
+RUN npx prisma generate
 RUN npx @nestjs/cli build
 
 ENV NODE_ENV=production
 EXPOSE 4000
 
-CMD ["sh", "-c", "npx prisma db push --config prisma.config.ts --accept-data-loss && node dist/main"]
+CMD ["sh", "-c", "npx prisma db push --schema=prisma/schema.prisma --accept-data-loss && node dist/main"]
