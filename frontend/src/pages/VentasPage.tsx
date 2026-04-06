@@ -2,7 +2,7 @@ import { useState, useCallback, useRef, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Search, Plus, Minus, Trash2, ShoppingCart,
-  User, CreditCard, CheckCircle, X, Package, ScanLine,
+  User, CreditCard, CheckCircle, X, Package, ScanLine, Printer,
 } from 'lucide-react';
 import { BrowserMultiFormatReader } from '@zxing/browser';
 import { productsService } from '@/services/products.service';
@@ -31,6 +31,18 @@ interface PaymentLine {
   methodId: string;
   nombre:   string;
   monto:    string;
+}
+
+interface SaleReceipt {
+  id:        string;
+  fecha:     Date;
+  customer:  { nombreCompleto: string } | null;
+  items:     CartItem[];
+  subtotal:  number;
+  igv:       number;
+  total:     number;
+  payments:  PaymentLine[];
+  tipoVenta: 'contado' | 'credito';
 }
 
 const IGV_RATE = 0.18;
@@ -64,17 +76,30 @@ function ProductCard({ product, onAdd }: { product: Product; onAdd: (p: Product)
 // ─── Modal de confirmación de pago ───────────────────────────────────────────
 
 interface PayModalProps {
-  open:          boolean;
-  onClose:       () => void;
-  total:         number;
+  open:           boolean;
+  onClose:        () => void;
+  total:          number;
+  cart:           CartItem[];
   paymentMethods: { id: string; nombre: string }[];
-  onConfirm:     (payments: PaymentLine[], tipoVenta: 'contado' | 'credito') => void;
-  loading:       boolean;
+  onConfirm:      (payments: PaymentLine[], tipoVenta: 'contado' | 'credito') => void;
+  loading:        boolean;
 }
 
-function PayModal({ open, onClose, total, paymentMethods, onConfirm, loading }: PayModalProps) {
+function PayModal({ open, onClose, total, cart, paymentMethods, onConfirm, loading }: PayModalProps) {
   const [tipoVenta, setTipoVenta] = useState<'contado' | 'credito'>('contado');
   const [payments, setPayments]   = useState<PaymentLine[]>([]);
+
+  // Al abrir en modo contado, pre-cargar primer método con el total completo
+  useEffect(() => {
+    if (!open) return;
+    setTipoVenta('contado');
+    if (paymentMethods.length > 0) {
+      const m = paymentMethods[0];
+      setPayments([{ methodId: m.id, nombre: m.nombre, monto: total.toFixed(2) }]);
+    } else {
+      setPayments([]);
+    }
+  }, [open]);
 
   const addLine = () => {
     if (paymentMethods.length === 0) return;
@@ -83,8 +108,8 @@ function PayModal({ open, onClose, total, paymentMethods, onConfirm, loading }: 
   };
 
   const updateLine = (i: number, field: keyof PaymentLine, value: string) => {
-    setPayments((p) => {
-      const copy = [...p];
+    setPayments((prev) => {
+      const copy = [...prev];
       if (field === 'methodId') {
         const m = paymentMethods.find((m) => m.id === value);
         copy[i] = { ...copy[i], methodId: value, nombre: m?.nombre ?? '' };
@@ -101,11 +126,6 @@ function PayModal({ open, onClose, total, paymentMethods, onConfirm, loading }: 
   const vuelto      = totalPagado - total;
   const canPay      = tipoVenta === 'credito' || (payments.length > 0 && totalPagado >= total);
 
-  const handleConfirm = () => {
-    if (!canPay) return;
-    onConfirm(payments, tipoVenta);
-  };
-
   const methodOptions = paymentMethods.map((m) => ({ value: m.id, label: m.nombre }));
 
   return (
@@ -113,89 +133,116 @@ function PayModal({ open, onClose, total, paymentMethods, onConfirm, loading }: 
       open={open}
       onClose={onClose}
       title="Procesar Pago"
-      size="md"
+      size="lg"
       footer={
         <>
           <Button variant="outline" onClick={onClose}>Cancelar</Button>
-          <Button onClick={handleConfirm} loading={loading} disabled={!canPay} icon={<CheckCircle size={16} />}>
+          <Button onClick={() => canPay && onConfirm(payments, tipoVenta)} loading={loading} disabled={!canPay} icon={<CheckCircle size={16} />}>
             Confirmar Venta
           </Button>
         </>
       }
     >
-      <div className="space-y-4">
-        <div className="flex gap-3">
-          <button
-            onClick={() => setTipoVenta('contado')}
-            className={`flex-1 py-2.5 rounded-lg border text-sm font-medium transition-colors ${
-              tipoVenta === 'contado' ? 'bg-blue-600 border-blue-600 text-white' : 'border-slate-300 text-slate-600 hover:bg-slate-50'
-            }`}
-          >
-            Contado
-          </button>
-          <button
-            onClick={() => setTipoVenta('credito')}
-            className={`flex-1 py-2.5 rounded-lg border text-sm font-medium transition-colors ${
-              tipoVenta === 'credito' ? 'bg-blue-600 border-blue-600 text-white' : 'border-slate-300 text-slate-600 hover:bg-slate-50'
-            }`}
-          >
-            Crédito
-          </button>
-        </div>
-
-        <div className="bg-blue-50 rounded-xl p-4 text-center">
-          <p className="text-xs text-slate-500 mb-1">Total a cobrar</p>
-          <p className="text-3xl font-bold text-blue-700">{formatCurrency(total)}</p>
-        </div>
-
-        {tipoVenta === 'contado' && (
-          <>
-            <div className="space-y-2">
-              {payments.map((p, i) => (
-                <div key={i} className="flex gap-2 items-center">
-                  <Select
-                    options={methodOptions}
-                    value={p.methodId}
-                    onChange={(e) => updateLine(i, 'methodId', e.target.value)}
-                    className="flex-1"
-                  />
-                  <Input
-                    type="number" step="0.01" min="0"
-                    placeholder="Monto"
-                    value={p.monto}
-                    onChange={(e) => updateLine(i, 'monto', e.target.value)}
-                    className="w-32"
-                  />
-                  <button onClick={() => removeLine(i)} className="p-2 text-slate-400 hover:text-red-500">
-                    <X size={16} />
-                  </button>
+      <div className="flex gap-5">
+        {/* Columna izquierda: productos */}
+        <div className="flex-1 min-w-0">
+          <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">Productos</p>
+          <div className="space-y-1 max-h-48 overflow-y-auto">
+            {cart.map((item) => (
+              <div key={item.product.id} className="flex justify-between items-center text-sm py-1 border-b border-slate-100 last:border-0">
+                <div className="flex-1 min-w-0">
+                  <p className="font-medium text-slate-800 truncate">{item.product.nombre}</p>
+                  <p className="text-xs text-slate-400">{formatCurrency(item.precioUnitario)} × {item.cantidad}</p>
                 </div>
-              ))}
-            </div>
-            <Button variant="outline" size="sm" icon={<Plus size={14} />} onClick={addLine} fullWidth>
-              Agregar método de pago
-            </Button>
-
-            {payments.length > 0 && (
-              <div className="border-t pt-3 space-y-1 text-sm">
-                <div className="flex justify-between text-slate-600">
-                  <span>Recibido:</span>
-                  <span className="font-medium">{formatCurrency(totalPagado)}</span>
-                </div>
-                <div className={`flex justify-between font-semibold ${vuelto >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>
-                  <span>Vuelto / Faltante:</span>
-                  <span>{formatCurrency(Math.abs(vuelto))}</span>
-                </div>
+                <span className="font-semibold text-slate-700 ml-2">
+                  {formatCurrency(item.cantidad * item.precioUnitario)}
+                </span>
               </div>
-            )}
-          </>
-        )}
-
-        {tipoVenta === 'credito' && (
-          <div className="rounded-lg bg-amber-50 border border-amber-200 p-3 text-sm text-amber-800">
-            La venta quedará pendiente de cobro. Se registrará en el crédito del cliente.
+            ))}
           </div>
-        )}
+          <div className="mt-3 pt-3 border-t border-slate-200">
+            <div className="flex justify-between text-base font-bold text-slate-800">
+              <span>Total</span>
+              <span className="text-blue-700">{formatCurrency(total)}</span>
+            </div>
+          </div>
+        </div>
+
+        {/* Columna derecha: pago */}
+        <div className="w-56 flex-shrink-0 space-y-3">
+          <div className="flex gap-2">
+            <button
+              onClick={() => { setTipoVenta('contado'); }}
+              className={`flex-1 py-2 rounded-lg border text-xs font-medium transition-colors ${
+                tipoVenta === 'contado' ? 'bg-blue-600 border-blue-600 text-white' : 'border-slate-300 text-slate-600 hover:bg-slate-50'
+              }`}
+            >
+              Contado
+            </button>
+            <button
+              onClick={() => setTipoVenta('credito')}
+              className={`flex-1 py-2 rounded-lg border text-xs font-medium transition-colors ${
+                tipoVenta === 'credito' ? 'bg-blue-600 border-blue-600 text-white' : 'border-slate-300 text-slate-600 hover:bg-slate-50'
+              }`}
+            >
+              Crédito
+            </button>
+          </div>
+
+          {tipoVenta === 'contado' && (
+            <>
+              <div className="space-y-2">
+                {payments.map((p, i) => (
+                  <div key={i} className="space-y-1">
+                    <div className="flex gap-1 items-center">
+                      <Select
+                        options={methodOptions}
+                        value={p.methodId}
+                        onChange={(e) => updateLine(i, 'methodId', e.target.value)}
+                        className="flex-1 text-xs"
+                      />
+                      <button onClick={() => removeLine(i)} className="p-1.5 text-slate-400 hover:text-red-500">
+                        <X size={14} />
+                      </button>
+                    </div>
+                    <Input
+                      type="number" step="0.01" min="0"
+                      placeholder="Monto S/"
+                      value={p.monto}
+                      onChange={(e) => updateLine(i, 'monto', e.target.value)}
+                    />
+                  </div>
+                ))}
+              </div>
+
+              <button
+                onClick={addLine}
+                className="w-full text-xs py-1.5 border border-dashed border-slate-300 rounded-lg text-slate-500 hover:border-blue-400 hover:text-blue-600 flex items-center justify-center gap-1"
+              >
+                <Plus size={12} /> Agregar método de pago
+              </button>
+
+              {payments.length > 0 && (
+                <div className="pt-2 space-y-1 text-xs">
+                  <div className="flex justify-between text-slate-600">
+                    <span>Recibido:</span>
+                    <span className="font-medium">{formatCurrency(totalPagado)}</span>
+                  </div>
+                  <div className={`flex justify-between font-semibold ${vuelto >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>
+                    <span>{vuelto >= 0 ? 'Vuelto:' : 'Faltante:'}</span>
+                    <span>{formatCurrency(Math.abs(vuelto))}</span>
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+
+          {tipoVenta === 'credito' && (
+            <div className="rounded-lg bg-amber-50 border border-amber-200 p-3 text-xs text-amber-800">
+              La venta quedará pendiente de cobro en el crédito del cliente.
+            </div>
+          )}
+        </div>
       </div>
     </Modal>
   );
@@ -250,6 +297,135 @@ function CustomerModal({ open, onClose, onSelect }: {
             )}
           </div>
         )}
+      </div>
+    </Modal>
+  );
+}
+
+// ─── Modal comprobante ────────────────────────────────────────────────────────
+
+function ReceiptModal({ receipt, onClose }: { receipt: SaleReceipt | null; onClose: () => void }) {
+  const printRef = useRef<HTMLDivElement>(null);
+
+  const handlePrint = () => {
+    const content = printRef.current;
+    if (!content) return;
+    const win = window.open('', '_blank', 'width=400,height=600');
+    if (!win) return;
+    win.document.write(`
+      <html><head><title>Comprobante</title>
+      <style>
+        body { font-family: monospace; font-size: 12px; margin: 0; padding: 12px; color: #000; }
+        .center { text-align: center; }
+        .bold { font-weight: bold; }
+        .line { border-top: 1px dashed #000; margin: 6px 0; }
+        .row { display: flex; justify-content: space-between; margin: 2px 0; }
+        .title { font-size: 15px; font-weight: bold; text-align: center; margin-bottom: 2px; }
+      </style></head><body>${content.innerHTML}</body></html>
+    `);
+    win.document.close();
+    win.focus();
+    win.print();
+    win.close();
+  };
+
+  if (!receipt) return null;
+
+  const fecha = receipt.fecha.toLocaleString('es-PE', {
+    day: '2-digit', month: '2-digit', year: 'numeric',
+    hour: '2-digit', minute: '2-digit',
+  });
+
+  return (
+    <Modal
+      open={!!receipt}
+      onClose={onClose}
+      title="Comprobante de Venta"
+      size="sm"
+      footer={
+        <div className="flex gap-2 w-full">
+          <Button variant="outline" onClick={onClose} fullWidth>Nueva venta</Button>
+          <Button icon={<Printer size={15} />} onClick={handlePrint} fullWidth>Imprimir</Button>
+        </div>
+      }
+    >
+      {/* Área imprimible */}
+      <div ref={printRef} className="font-mono text-xs text-slate-800 space-y-1">
+        <p className="title text-center font-bold text-sm">OZZO COFFEE</p>
+        <p className="text-center text-slate-500">Comprobante de Venta</p>
+        <div className="border-t border-dashed border-slate-300 my-2" />
+
+        <div className="flex justify-between">
+          <span className="text-slate-500">Fecha:</span>
+          <span>{fecha}</span>
+        </div>
+        <div className="flex justify-between">
+          <span className="text-slate-500">N° Venta:</span>
+          <span className="truncate max-w-[140px]">{receipt.id.slice(-8).toUpperCase()}</span>
+        </div>
+        <div className="flex justify-between">
+          <span className="text-slate-500">Cliente:</span>
+          <span className="truncate max-w-[140px]">{receipt.customer?.nombreCompleto ?? 'Consumidor Final'}</span>
+        </div>
+        <div className="flex justify-between">
+          <span className="text-slate-500">Tipo:</span>
+          <span className="capitalize">{receipt.tipoVenta}</span>
+        </div>
+
+        <div className="border-t border-dashed border-slate-300 my-2" />
+        <div className="flex justify-between font-semibold text-slate-500">
+          <span>Producto</span>
+          <span>Subtotal</span>
+        </div>
+        {receipt.items.map((item) => (
+          <div key={item.product.id}>
+            <p className="font-medium truncate">{item.product.nombre}</p>
+            <div className="flex justify-between text-slate-500">
+              <span>{item.cantidad} × {formatCurrency(item.precioUnitario)}</span>
+              <span className="font-semibold text-slate-700">{formatCurrency(item.cantidad * item.precioUnitario)}</span>
+            </div>
+          </div>
+        ))}
+
+        <div className="border-t border-dashed border-slate-300 my-2" />
+        <div className="flex justify-between text-slate-500">
+          <span>Subtotal (sin IGV)</span>
+          <span>{formatCurrency(receipt.subtotal)}</span>
+        </div>
+        <div className="flex justify-between text-slate-500">
+          <span>IGV (18%)</span>
+          <span>{formatCurrency(receipt.igv)}</span>
+        </div>
+        <div className="flex justify-between font-bold text-base text-slate-800 pt-1">
+          <span>TOTAL</span>
+          <span className="text-blue-700">{formatCurrency(receipt.total)}</span>
+        </div>
+
+        {receipt.tipoVenta === 'contado' && receipt.payments.length > 0 && (
+          <>
+            <div className="border-t border-dashed border-slate-300 my-2" />
+            {receipt.payments.map((p, i) => (
+              <div key={i} className="flex justify-between text-slate-600">
+                <span>{p.nombre}:</span>
+                <span>{formatCurrency(parseFloat(p.monto) || 0)}</span>
+              </div>
+            ))}
+            {(() => {
+              const pagado = receipt.payments.reduce((a, p) => a + (parseFloat(p.monto) || 0), 0);
+              const vuelto = pagado - receipt.total;
+              return vuelto > 0 ? (
+                <div className="flex justify-between font-semibold text-emerald-600">
+                  <span>Vuelto:</span>
+                  <span>{formatCurrency(vuelto)}</span>
+                </div>
+              ) : null;
+            })()}
+          </>
+        )}
+
+        <div className="border-t border-dashed border-slate-300 mt-2 pt-2 text-center text-slate-400 text-xs">
+          ¡Gracias por su compra!
+        </div>
       </div>
     </Modal>
   );
@@ -379,7 +555,7 @@ export default function VentasPage() {
   const [payModal, setPayModal]     = useState(false);
   const [custModal, setCustModal]   = useState(false);
   const [scanModal, setScanModal]   = useState(false);
-  const [successSale, setSuccessSale] = useState<string | null>(null);
+  const [receipt, setReceipt] = useState<SaleReceipt | null>(null);
   const [scanError, setScanError]   = useState<string | null>(null);
 
   // Queries
@@ -407,11 +583,29 @@ export default function VentasPage() {
   // Mutation crear venta
   const createMut = useMutation({
     mutationFn: salesService.create,
-    onSuccess: (sale) => {
+    onSuccess: (sale, variables) => {
+      // Guardar recibo antes de limpiar carrito
+      const payments = variables.tipoVenta === 'contado'
+        ? (variables.payments ?? []).map((p: any) => ({
+            methodId: p.paymentMethodId,
+            nombre:   (payMethods ?? []).find((pm: { id: string; nombre: string }) => pm.id === p.paymentMethodId)?.nombre ?? '',
+            monto:    String(p.monto),
+          }))
+        : [];
+      setReceipt({
+        id:        sale.id,
+        fecha:     new Date(),
+        customer:  customer,
+        items:     [...cart],
+        subtotal:  subtotalSinIgv,
+        igv:       igvTotal,
+        total:     total,
+        payments,
+        tipoVenta: variables.tipoVenta,
+      });
       setCart([]);
       setCustomer(null);
       setPayModal(false);
-      setSuccessSale(sale.id);
       qc.invalidateQueries({ queryKey: ['products'] });
       qc.invalidateQueries({ queryKey: ['dashboard'] });
     },
@@ -658,6 +852,7 @@ export default function VentasPage() {
         open={payModal}
         onClose={() => setPayModal(false)}
         total={total}
+        cart={cart}
         paymentMethods={payMethods ?? []}
         onConfirm={handleConfirmPay}
         loading={createMut.isPending}
@@ -675,21 +870,7 @@ export default function VentasPage() {
         onScan={handleScan}
       />
 
-      {/* Venta exitosa */}
-      <Modal
-        open={!!successSale}
-        onClose={() => setSuccessSale(null)}
-        title="¡Venta registrada!"
-        size="sm"
-        footer={<Button onClick={() => setSuccessSale(null)}>Nueva venta</Button>}
-      >
-        <div className="flex flex-col items-center gap-3 py-4">
-          <CheckCircle size={48} className="text-emerald-500" />
-          <p className="text-sm text-slate-600 text-center">
-            La venta fue procesada correctamente.
-          </p>
-        </div>
-      </Modal>
+      <ReceiptModal receipt={receipt} onClose={() => setReceipt(null)} />
     </div>
   );
 }
