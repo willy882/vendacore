@@ -41,6 +41,7 @@ export class SalesService {
 
       await this.prisma.paymentMethod.createMany({
         data: defaults.map((d) => ({
+          id:         `${businessId}-${d.tipo}`,
           nombre:     d.nombre,
           tipo:       d.tipo,
           businessId,
