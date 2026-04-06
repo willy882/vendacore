@@ -222,7 +222,7 @@ function PayModal({ open, onClose, total, cart, paymentMethods, onConfirm, loadi
                     {/* Info de pago según método */}
                     {p.nombre.toLowerCase() === 'yape' && (
                       <div className="rounded-lg overflow-hidden border border-purple-200 bg-purple-50 p-2 flex flex-col items-center gap-1">
-                        <img src="/yape-qr.png" alt="QR Yape" className="w-36 h-36 object-contain rounded" />
+                        <img src="/yape-qr.png" alt="QR Yape" className="w-full max-w-xs object-contain rounded" />
                         <p className="text-xs text-purple-700 font-medium">Escanea para pagar con Yape</p>
                       </div>
                     )}
@@ -237,12 +237,14 @@ function PayModal({ open, onClose, total, cart, paymentMethods, onConfirm, loadi
                 ))}
               </div>
 
-              <button
-                onClick={addLine}
-                className="w-full text-xs py-1.5 border border-dashed border-slate-300 rounded-lg text-slate-500 hover:border-blue-400 hover:text-blue-600 flex items-center justify-center gap-1"
-              >
-                <Plus size={12} /> Agregar método de pago
-              </button>
+              {totalPagado < total && (
+                <button
+                  onClick={addLine}
+                  className="w-full text-xs py-1.5 border border-dashed border-slate-300 rounded-lg text-slate-500 hover:border-blue-400 hover:text-blue-600 flex items-center justify-center gap-1"
+                >
+                  <Plus size={12} /> Agregar método de pago
+                </button>
+              )}
 
               {payments.length > 0 && (
                 <div className="pt-2 space-y-1 text-xs">
