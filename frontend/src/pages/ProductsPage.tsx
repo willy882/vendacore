@@ -259,7 +259,7 @@ function ProductModal({ open, onClose, product, categories }: ProductModalProps)
   const { register, handleSubmit, reset, setValue, formState: { errors, isSubmitting } } =
     useForm<FormData>({
       resolver: zodResolver(schema),
-      defaultValues: product
+      values: product
         ? {
             nombre:        product.nombre,
             codigoInterno: product.codigoInterno ?? '',
@@ -835,6 +835,7 @@ export default function ProductsPage() {
 
       {/* ── Modales ───────────────────────────────────────────────────── */}
       <ProductModal
+        key={editing?.id ?? 'new'}
         open={prodModal}
         onClose={() => { setProdModal(false); setEditing(null); }}
         product={editing}

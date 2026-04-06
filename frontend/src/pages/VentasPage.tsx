@@ -275,18 +275,31 @@ function ScannerModal({ open, onClose, onScan }: {
     const reader = new BrowserMultiFormatReader();
     readerRef.current = reader;
 
-    reader.decodeFromVideoDevice(undefined, videoRef.current, (result, err) => {
+    // Usar cámara trasera en móvil (environment) con fallback a cualquier cámara
+    const constraints: MediaStreamConstraints = {
+      video: { facingMode: { ideal: 'environment' } },
+    };
+
+    reader.decodeFromConstraints(constraints, videoRef.current, (result, err) => {
       if (result) {
         const code = result.getText();
         setScanned(code);
         onScan(code);
-        // pausa 1.5s para mostrar feedback antes de cerrar
         setTimeout(() => { onClose(); setScanned(null); }, 1200);
       }
-      if (err && err.name !== 'NotFoundException') {
-        setError('No se pudo acceder a la cámara. Verifica los permisos.');
+      // Solo mostrar error si es un fallo real de acceso, no errores de frame vacío
+      if (err && err.name !== 'NotFoundException' && err.name !== 'ChecksumException' && err.name !== 'FormatException') {
+        setError('No se pudo acceder a la cámara. Asegúrate de haber dado permiso de cámara y que el sitio use HTTPS.');
       }
-    }).catch(() => setError('No se pudo acceder a la cámara. Verifica los permisos.'));
+    }).catch((e: Error) => {
+      if (e.name === 'NotAllowedError') {
+        setError('Permiso de cámara denegado. Ve a Configuración del navegador y permite el acceso a la cámara para este sitio.');
+      } else if (e.name === 'NotFoundError') {
+        setError('No se encontró ninguna cámara en el dispositivo.');
+      } else {
+        setError('No se pudo iniciar la cámara. Intenta recargar la página.');
+      }
+    });
 
     return () => {
       readerRef.current = null;
