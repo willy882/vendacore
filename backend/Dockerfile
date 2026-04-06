@@ -15,4 +15,4 @@ RUN npx @nestjs/cli build
 ENV NODE_ENV=production
 EXPOSE 4000
 
-CMD ["node", "dist/main"]
+CMD ["sh", "-c", "npx prisma db push --config prisma.config.ts --accept-data-loss && node dist/main"]
