@@ -572,10 +572,23 @@ export default function VentasPage() {
     queryFn:  cashService.getActive,
   });
 
-  const { data: payMethods } = useQuery({
+  const DEFAULT_PAY_METHODS = [
+    { id: 'efectivo',       nombre: 'Efectivo'        },
+    { id: 'yape',           nombre: 'Yape'            },
+    { id: 'plin',           nombre: 'Plin'            },
+    { id: 'transferencia',  nombre: 'Transferencia'   },
+    { id: 'tarjeta_debito', nombre: 'Tarjeta Débito'  },
+  ];
+
+  const { data: payMethodsFromApi } = useQuery({
     queryKey: ['payment-methods'],
     queryFn:  () => salesService.getPaymentMethods(),
   });
+
+  // Usar métodos de la API si cargaron, sino los defaults locales
+  const payMethods = (payMethodsFromApi && payMethodsFromApi.length > 0)
+    ? payMethodsFromApi
+    : DEFAULT_PAY_METHODS;
 
   // Mutation crear venta
   const createMut = useMutation({
