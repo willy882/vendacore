@@ -280,17 +280,15 @@ function ScannerModal({ open, onClose, onScan }: {
       video: { facingMode: { ideal: 'environment' } },
     };
 
-    reader.decodeFromConstraints(constraints, videoRef.current, (result, err) => {
+    reader.decodeFromConstraints(constraints, videoRef.current, (result) => {
       if (result) {
         const code = result.getText();
         setScanned(code);
         onScan(code);
         setTimeout(() => { onClose(); setScanned(null); }, 1200);
       }
-      // Solo mostrar error si es un fallo real de acceso, no errores de frame vacío
-      if (err && err.name !== 'NotFoundException' && err.name !== 'ChecksumException' && err.name !== 'FormatException') {
-        setError('No se pudo acceder a la cámara. Asegúrate de haber dado permiso de cámara y que el sitio use HTTPS.');
-      }
+      // Los errores del callback son normales (NotFoundException por cada frame sin código)
+      // No se muestran al usuario — solo el .catch() maneja fallos reales de acceso
     }).catch((e: Error) => {
       if (e.name === 'NotAllowedError') {
         setError('Permiso de cámara denegado. Ve a Configuración del navegador y permite el acceso a la cámara para este sitio.');
