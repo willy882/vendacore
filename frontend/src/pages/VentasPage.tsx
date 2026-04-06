@@ -47,6 +47,14 @@ interface SaleReceipt {
 
 const IGV_RATE = 0.18;
 
+const DEFAULT_PAY_METHODS = [
+  { id: 'efectivo',       nombre: 'Efectivo'       },
+  { id: 'yape',           nombre: 'Yape'           },
+  { id: 'plin',           nombre: 'Plin'           },
+  { id: 'transferencia',  nombre: 'Transferencia'  },
+  { id: 'tarjeta_debito', nombre: 'Tarjeta Débito' },
+];
+
 function calcIgv(product: Product, subtotal: number) {
   return product.igvTipo === 'gravado' ? subtotal * IGV_RATE : 0;
 }
@@ -88,11 +96,14 @@ interface PayModalProps {
 function PayModal({ open, onClose, total, cart, paymentMethods, onConfirm, loading }: PayModalProps) {
   const [tipoVenta, setTipoVenta] = useState<'contado' | 'credito'>('contado');
   const [payments, setPayments]   = useState<PaymentLine[]>([]);
+  const initializedRef = useRef(false);
 
-  // Pre-cargar primer método cuando el modal abre O cuando llegan los métodos (carga async)
+  // Inicializar pagos UNA SOLA VEZ cuando el modal abre (o cuando llegan los métodos por primera vez)
   useEffect(() => {
-    if (!open) return;
-    if (paymentMethods.length > 0 && payments.length === 0) {
+    if (!open) { initializedRef.current = false; setPayments([]); return; }
+    if (initializedRef.current) return;
+    if (paymentMethods.length > 0) {
+      initializedRef.current = true;
       const m = paymentMethods[0];
       setPayments([{ methodId: m.id, nombre: m.nombre, monto: total.toFixed(2) }]);
     }
@@ -586,13 +597,6 @@ export default function VentasPage() {
     queryFn:  cashService.getActive,
   });
 
-  const DEFAULT_PAY_METHODS = [
-    { id: 'efectivo',       nombre: 'Efectivo'        },
-    { id: 'yape',           nombre: 'Yape'            },
-    { id: 'plin',           nombre: 'Plin'            },
-    { id: 'transferencia',  nombre: 'Transferencia'   },
-    { id: 'tarjeta_debito', nombre: 'Tarjeta Débito'  },
-  ];
 
   const { data: payMethodsFromApi } = useQuery({
     queryKey: ['payment-methods'],
