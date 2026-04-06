@@ -639,6 +639,10 @@ export default function VentasPage() {
       qc.invalidateQueries({ queryKey: ['products'] });
       qc.invalidateQueries({ queryKey: ['dashboard'] });
     },
+    onError: (error: any) => {
+      const msg = error?.response?.data?.message;
+      alert(Array.isArray(msg) ? msg.join('\n') : (msg ?? 'Error al registrar la venta. Intenta de nuevo.'));
+    },
   });
 
   // Carrito helpers
