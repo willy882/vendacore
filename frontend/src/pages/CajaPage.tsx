@@ -262,7 +262,7 @@ export default function CajaPage() {
                 ))}
                 <div className="bg-slate-50 rounded-xl p-3">
                   <p className="text-xs text-slate-500">Abierta por</p>
-                  <p className="text-sm font-semibold text-slate-800">{session.user.nombre} {session.user.apellido}</p>
+                  <p className="text-sm font-semibold text-slate-800">{session.user?.nombre} {session.user?.apellido}</p>
                 </div>
                 <div className="bg-slate-50 rounded-xl p-3">
                   <p className="text-xs text-slate-500">Desde</p>
@@ -348,7 +348,7 @@ export default function CajaPage() {
                   <tr key={s.id} className="border-b hover:bg-slate-50">
                     <td className="px-4 py-3 text-slate-600 text-xs">{formatDateTime(s.fechaApertura)}</td>
                     <td className="px-4 py-3 text-slate-600 text-xs">{s.fechaCierre ? formatDateTime(s.fechaCierre) : '—'}</td>
-                    <td className="px-4 py-3 text-slate-700">{s.user.nombre} {s.user.apellido}</td>
+                    <td className="px-4 py-3 text-slate-700">{s.user?.nombre} {s.user?.apellido}</td>
                     <td className="px-4 py-3">{formatCurrency(Number(s.montoApertura))}</td>
                     <td className="px-4 py-3">{s.montoCierreSistema ? formatCurrency(Number(s.montoCierreSistema)) : '—'}</td>
                     <td className="px-4 py-3">{s.montoCierreReal ? formatCurrency(Number(s.montoCierreReal)) : '—'}</td>

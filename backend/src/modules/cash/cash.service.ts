@@ -33,6 +33,9 @@ export class CashService {
         estado: 'abierta',
         observaciones: dto.observaciones ?? null,
       },
+      include: {
+        user: { select: { nombre: true, apellido: true } },
+      },
     });
 
     this.logger.log(`Caja abierta: session=${session.id} user=${userId} monto=${dto.montoApertura}`);
@@ -112,6 +115,7 @@ export class CashService {
     const session = await this.prisma.cashSession.findFirst({
       where: { businessId, userId, estado: 'abierta' },
       include: {
+        user: { select: { nombre: true, apellido: true } },
         movements: {
           orderBy: { fecha: 'desc' },
           take: 50,
