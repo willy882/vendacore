@@ -19,6 +19,46 @@ export class SalesService {
     private inventoryService: InventoryService,
   ) {}
 
+  // ── MÉTODOS DE PAGO ─────────────────────────────────────────────────────
+
+  async getPaymentMethods(businessId: string) {
+    const existing = await this.prisma.paymentMethod.findMany({
+      where: { businessId, isActive: true },
+      select: { id: true, nombre: true, tipo: true },
+      orderBy: { nombre: 'asc' },
+    });
+
+    // Si el negocio aún no tiene métodos de pago, crearlos automáticamente
+    if (existing.length === 0) {
+      const defaults = [
+        { nombre: 'Efectivo',        tipo: 'efectivo'        },
+        { nombre: 'Yape',            tipo: 'yape'            },
+        { nombre: 'Plin',            tipo: 'plin'            },
+        { nombre: 'Transferencia',   tipo: 'transferencia'   },
+        { nombre: 'Tarjeta Débito',  tipo: 'tarjeta_debito'  },
+        { nombre: 'Tarjeta Crédito', tipo: 'tarjeta_credito' },
+      ] as const;
+
+      await this.prisma.paymentMethod.createMany({
+        data: defaults.map((d) => ({
+          nombre:     d.nombre,
+          tipo:       d.tipo,
+          businessId,
+          isActive:   true,
+        })),
+        skipDuplicates: true,
+      });
+
+      return this.prisma.paymentMethod.findMany({
+        where: { businessId, isActive: true },
+        select: { id: true, nombre: true, tipo: true },
+        orderBy: { nombre: 'asc' },
+      });
+    }
+
+    return existing;
+  }
+
   // ── REGISTRAR VENTA ──────────────────────────────────────────────────────
 
   async create(dto: CreateSaleDto, userId: string, businessId: string) {

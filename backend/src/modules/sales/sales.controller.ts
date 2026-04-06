@@ -17,6 +17,15 @@ export class SalesController {
   constructor(private service: SalesService) {}
 
   /**
+   * GET /api/v1/sales/payment-methods
+   * Lista de métodos de pago activos del negocio
+   */
+  @Get('payment-methods')
+  getPaymentMethods(@CurrentUser() user: any) {
+    return this.service.getPaymentMethods(user.businessId);
+  }
+
+  /**
    * GET /api/v1/sales/summary?period=today|week|month|year
    * KPIs del período: total ventas, ticket promedio, transacciones
    */
