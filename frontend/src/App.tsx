@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { useAuthStore } from '@/stores/auth.store';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Spinner }   from '@/components/ui/Spinner';
+import { ErrorBoundary } from '@/components/ErrorBoundary';
 
 // ── Carga diferida: cada página es un chunk separado ──────────────────────────
 const LoginPage      = lazy(() => import('@/pages/LoginPage'));
@@ -54,6 +55,7 @@ function PublicRoute({ children }: { children: React.ReactNode }) {
 
 export default function App() {
   return (
+    <ErrorBoundary>
     <QueryClientProvider client={queryClient}>
       <BrowserRouter>
         <Suspense fallback={<PageLoader />}>
@@ -61,18 +63,18 @@ export default function App() {
             <Route path="/login" element={<PublicRoute><LoginPage /></PublicRoute>} />
 
             <Route path="/" element={<PrivateRoute><AppLayout /></PrivateRoute>}>
-              <Route index              element={<DashboardPage />} />
-              <Route path="ventas"      element={<VentasPage />} />
-              <Route path="productos"   element={<ProductsPage />} />
-              <Route path="inventario"  element={<InventarioPage />} />
-              <Route path="clientes"    element={<ClientesPage />} />
-              <Route path="proveedores" element={<ProveedoresPage />} />
-              <Route path="compras"     element={<ComprasPage />} />
-              <Route path="gastos"      element={<GastosPage />} />
-              <Route path="caja"        element={<CajaPage />} />
-              <Route path="reportes"    element={<ReportesPage />} />
-              <Route path="auditoria"   element={<AuditoriaPage />} />
-              <Route path="usuarios"    element={<UsuariosPage />} />
+              <Route index              element={<ErrorBoundary><DashboardPage /></ErrorBoundary>} />
+              <Route path="ventas"      element={<ErrorBoundary><VentasPage /></ErrorBoundary>} />
+              <Route path="productos"   element={<ErrorBoundary><ProductsPage /></ErrorBoundary>} />
+              <Route path="inventario"  element={<ErrorBoundary><InventarioPage /></ErrorBoundary>} />
+              <Route path="clientes"    element={<ErrorBoundary><ClientesPage /></ErrorBoundary>} />
+              <Route path="proveedores" element={<ErrorBoundary><ProveedoresPage /></ErrorBoundary>} />
+              <Route path="compras"     element={<ErrorBoundary><ComprasPage /></ErrorBoundary>} />
+              <Route path="gastos"      element={<ErrorBoundary><GastosPage /></ErrorBoundary>} />
+              <Route path="caja"        element={<ErrorBoundary><CajaPage /></ErrorBoundary>} />
+              <Route path="reportes"    element={<ErrorBoundary><ReportesPage /></ErrorBoundary>} />
+              <Route path="auditoria"   element={<ErrorBoundary><AuditoriaPage /></ErrorBoundary>} />
+              <Route path="usuarios"    element={<ErrorBoundary><UsuariosPage /></ErrorBoundary>} />
             </Route>
 
             <Route path="*" element={<Navigate to="/" replace />} />
@@ -80,5 +82,6 @@ export default function App() {
         </Suspense>
       </BrowserRouter>
     </QueryClientProvider>
+    </ErrorBoundary>
   );
 }
