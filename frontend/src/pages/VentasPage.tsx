@@ -257,38 +257,62 @@ function CustomerModal({ open, onClose, onSelect }: {
 
 // ─── Modal escáner de código de barras ───────────────────────────────────────
 
+// Beep corto via Web Audio API (no requiere archivos externos)
+function playBeep() {
+  try {
+    const ctx = new AudioContext();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.frequency.value = 1200;
+    osc.type = 'square';
+    gain.gain.setValueAtTime(0.3, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.12);
+    osc.start(ctx.currentTime);
+    osc.stop(ctx.currentTime + 0.12);
+    osc.onended = () => ctx.close();
+  } catch { /* silenciar si el navegador no soporta AudioContext */ }
+}
+
 function ScannerModal({ open, onClose, onScan }: {
   open: boolean;
   onClose: () => void;
   onScan: (code: string) => void;
 }) {
-  const videoRef  = useRef<HTMLVideoElement>(null);
-  const readerRef = useRef<BrowserMultiFormatReader | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const videoRef      = useRef<HTMLVideoElement>(null);
+  const readerRef     = useRef<BrowserMultiFormatReader | null>(null);
+  const cooldownRef   = useRef(false);           // evita doble-lectura del mismo frame
+  const [error, setError]   = useState<string | null>(null);
   const [scanned, setScanned] = useState<string | null>(null);
 
   useEffect(() => {
     if (!open || !videoRef.current) return;
     setError(null);
     setScanned(null);
+    cooldownRef.current = false;
 
     const reader = new BrowserMultiFormatReader();
     readerRef.current = reader;
 
-    // Usar cámara trasera en móvil (environment) con fallback a cualquier cámara
     const constraints: MediaStreamConstraints = {
       video: { facingMode: { ideal: 'environment' } },
     };
 
     reader.decodeFromConstraints(constraints, videoRef.current, (result) => {
-      if (result) {
-        const code = result.getText();
-        setScanned(code);
-        onScan(code);
-        setTimeout(() => { onClose(); setScanned(null); }, 1200);
-      }
-      // Los errores del callback son normales (NotFoundException por cada frame sin código)
-      // No se muestran al usuario — solo el .catch() maneja fallos reales de acceso
+      if (!result || cooldownRef.current) return;
+
+      cooldownRef.current = true;               // bloquear lecturas durante 1 s
+      const code = result.getText();
+      setScanned(code);
+      playBeep();
+      onScan(code);
+
+      // Mostrar feedback 900 ms y volver a escanear (modal sigue abierto)
+      setTimeout(() => {
+        setScanned(null);
+        cooldownRef.current = false;
+      }, 900);
     }).catch((e: Error) => {
       if (e.name === 'NotAllowedError') {
         setError('Permiso de cámara denegado. Ve a Configuración del navegador y permite el acceso a la cámara para este sitio.');
@@ -315,9 +339,8 @@ function ScannerModal({ open, onClose, onScan }: {
         ) : (
           <div className="relative w-full rounded-xl overflow-hidden bg-black aspect-video">
             <video ref={videoRef} className="w-full h-full object-cover" muted autoPlay playsInline />
-            {/* Visor de enfoque */}
             <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-              <div className={`w-56 h-28 rounded-lg border-2 transition-colors ${scanned ? 'border-emerald-400 bg-emerald-400/10' : 'border-white/60'}`}>
+              <div className={`w-56 h-28 rounded-lg border-2 transition-all duration-200 ${scanned ? 'border-emerald-400 bg-emerald-400/20' : 'border-white/60'}`}>
                 {!scanned && (
                   <div className="absolute top-0 left-0 right-0 h-0.5 bg-red-400 animate-bounce" />
                 )}
@@ -327,9 +350,9 @@ function ScannerModal({ open, onClose, onScan }: {
         )}
 
         {scanned ? (
-          <div className="flex items-center gap-2 text-emerald-700 font-medium text-sm">
+          <div className="flex items-center gap-2 text-emerald-700 font-semibold text-sm animate-pulse">
             <CheckCircle size={18} />
-            Código detectado: <span className="font-mono">{scanned}</span>
+            +1 agregado — <span className="font-mono">{scanned}</span>
           </div>
         ) : (
           <p className="text-sm text-slate-500 text-center">
