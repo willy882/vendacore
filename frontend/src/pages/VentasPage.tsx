@@ -89,17 +89,14 @@ function PayModal({ open, onClose, total, cart, paymentMethods, onConfirm, loadi
   const [tipoVenta, setTipoVenta] = useState<'contado' | 'credito'>('contado');
   const [payments, setPayments]   = useState<PaymentLine[]>([]);
 
-  // Al abrir en modo contado, pre-cargar primer método con el total completo
+  // Pre-cargar primer método cuando el modal abre O cuando llegan los métodos (carga async)
   useEffect(() => {
     if (!open) return;
-    setTipoVenta('contado');
-    if (paymentMethods.length > 0) {
+    if (paymentMethods.length > 0 && payments.length === 0) {
       const m = paymentMethods[0];
       setPayments([{ methodId: m.id, nombre: m.nombre, monto: total.toFixed(2) }]);
-    } else {
-      setPayments([]);
     }
-  }, [open]);
+  }, [open, paymentMethods]);
 
   const addLine = () => {
     if (paymentMethods.length === 0) return;
