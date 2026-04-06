@@ -14,7 +14,7 @@ export const inventoryService = {
     productId:   string;
     tipo:        'ajuste_entrada' | 'ajuste_salida';
     cantidad:    number;
-    motivo:      string;
+    motivo?:     string;
     costoUnitario?: number;
   }) => api.post('/inventory/adjustments', data).then((r) => r.data),
 };

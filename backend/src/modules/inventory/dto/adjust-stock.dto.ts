@@ -21,4 +21,7 @@ export class AdjustStockDto {
 
   @IsString() @IsOptional()
   observaciones?: string;
+
+  @IsString() @IsOptional()
+  motivo?: string;
 }

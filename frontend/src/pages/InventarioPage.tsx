@@ -19,10 +19,10 @@ import { useAuthStore } from '@/stores/auth.store';
 // ── Adjustment modal ────────────────────────────────────────────────��─────────
 
 const adjSchema = z.object({
-  productId:    z.string().min(1, 'Seleccione un producto'),
-  tipo:         z.enum(['ajuste_entrada', 'ajuste_salida']),
-  cantidad:     z.string().min(1, 'Requerido'),
-  motivo:       z.string().min(3, 'Describa el motivo'),
+  productId:     z.string().min(1, 'Seleccione un producto'),
+  tipo:          z.enum(['ajuste_entrada', 'ajuste_salida']),
+  cantidad:      z.string().min(1, 'Ingrese la cantidad'),
+  motivo:        z.string().optional(),
   costoUnitario: z.string().optional(),
 });
 type AdjForm = z.infer<typeof adjSchema>;
@@ -36,16 +36,22 @@ function AdjustModal({ open, onClose, products }: { open: boolean; onClose: () =
 
   const adjMut = useMutation({
     mutationFn: (d: AdjForm) => inventoryService.adjust({
-      productId:    d.productId,
-      tipo:         d.tipo,
-      cantidad:     parseFloat(d.cantidad),
-      motivo:       d.motivo,
+      productId:     d.productId,
+      tipo:          d.tipo,
+      cantidad:      parseFloat(d.cantidad),
+      motivo:        d.motivo || undefined,
       costoUnitario: d.costoUnitario ? parseFloat(d.costoUnitario) : undefined,
     }),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['products'] }); reset(); onClose(); },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['products'] });
+      qc.invalidateQueries({ queryKey: ['valorizado'] });
+      reset();
+      onClose();
+    },
   });
 
   const prodOptions = products.map((p) => ({ value: p.id, label: `${p.codigoInterno ?? '?'} — ${p.nombre}` }));
+  const errMsg = (adjMut.error as any)?.response?.data?.message;
 
   return (
     <Modal open={open} onClose={() => { reset(); onClose(); }} title="Ajuste de Inventario" size="md"
@@ -55,16 +61,21 @@ function AdjustModal({ open, onClose, products }: { open: boolean; onClose: () =
       </>}
     >
       <div className="space-y-4">
-        <Select label="Producto *" options={prodOptions} placeholder="— Seleccione —" {...register('productId')} error={errors.productId?.message} />
+        {errMsg && (
+          <div className="rounded-lg bg-red-50 border border-red-200 px-3 py-2 text-sm text-red-700">
+            {Array.isArray(errMsg) ? errMsg.join(', ') : errMsg}
+          </div>
+        )}
+        <Select label="Producto *" options={prodOptions} placeholder="— Seleccione un producto —" {...register('productId')} error={errors.productId?.message} />
         <div className="grid grid-cols-2 gap-4">
           <Select label="Tipo *" options={[
-            { value: 'ajuste_entrada', label: 'Entrada / Incremento' },
-            { value: 'ajuste_salida',  label: 'Salida / Decremento' },
+            { value: 'ajuste_entrada', label: '↑ Entrada / Incremento' },
+            { value: 'ajuste_salida',  label: '↓ Salida / Decremento' },
           ]} {...register('tipo')} />
-          <Input label="Cantidad *" type="number" step="0.01" min="0.01" {...register('cantidad')} error={errors.cantidad?.message} />
+          <Input label="Cantidad *" type="number" step="0.01" min="0.01" placeholder="0" {...register('cantidad')} error={errors.cantidad?.message} />
         </div>
-        <Input label="Costo unitario (S/) — opcional" type="number" step="0.0001" min="0" {...register('costoUnitario')} />
-        <Input label="Motivo *" placeholder="Ej: Merma por caducidad, Error conteo..." {...register('motivo')} error={errors.motivo?.message} />
+        <Input label="Costo unitario (S/) — opcional" type="number" step="0.0001" min="0" placeholder="0.00" {...register('costoUnitario')} />
+        <Input label="Motivo / Observación" placeholder="Ej: Stock inicial, Merma, Error de conteo..." {...register('motivo')} />
       </div>
     </Modal>
   );
