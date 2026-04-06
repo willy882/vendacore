@@ -259,7 +259,7 @@ function ProductModal({ open, onClose, product, categories }: ProductModalProps)
   const { register, handleSubmit, reset, setValue, formState: { errors, isSubmitting } } =
     useForm<FormData>({
       resolver: zodResolver(schema),
-      values: product
+      values: (product
         ? {
             nombre:        product.nombre,
             codigoInterno: product.codigoInterno ?? '',
@@ -272,7 +272,8 @@ function ProductModal({ open, onClose, product, categories }: ProductModalProps)
             igvTipo:       product.igvTipo ?? 'gravado',
             stockMinimo:   String(product.stockMinimo ?? 0),
           }
-        : { igvTipo: 'gravado' as const, precioVenta: '', precioCompra: '', stockMinimo: '' },
+        : { nombre: '', igvTipo: 'gravado' as const, precioVenta: '', precioCompra: '', stockMinimo: '' }
+      ) as FormData,
     });
 
   // Auto-generar EAN-13 al abrir el modal de creación
