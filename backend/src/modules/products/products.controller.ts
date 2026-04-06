@@ -76,7 +76,7 @@ export class ProductsController {
   @Roles('administrador', 'supervisor', 'almacenero')
   @Post()
   create(@Body() dto: CreateProductDto, @CurrentUser() user: any) {
-    return this.service.create(dto, user.businessId);
+    return this.service.create(dto, user.businessId, user.id);
   }
 
   /** PUT /api/v1/products/:id */

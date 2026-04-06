@@ -11,10 +11,10 @@ export const inventoryService = {
     api.get('/inventory/rotacion', { params: { days } }).then((r) => r.data),
 
   adjust: (data: {
-    productId:   string;
-    tipo:        'ajuste_entrada' | 'ajuste_salida';
-    cantidad:    number;
-    motivo?:     string;
+    productId:      string;
+    tipo:           'ajuste_entrada' | 'ajuste_salida';
+    cantidad:       number;
+    observaciones?: string;
     costoUnitario?: number;
   }) => api.post('/inventory/adjustments', data).then((r) => r.data),
 };

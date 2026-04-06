@@ -112,7 +112,7 @@ export class ProductsService {
     return product;
   }
 
-  async create(dto: CreateProductDto, businessId: string) {
+  async create(dto: CreateProductDto, businessId: string, userId?: string) {
     if (dto.codigoInterno) {
       const dup = await this.prisma.product.findFirst({
         where: { codigoInterno: dto.codigoInterno, businessId },
@@ -125,17 +125,38 @@ export class ProductsService {
       });
       if (dup) throw new ConflictException('Ya existe un producto con ese código de barras');
     }
-    return this.prisma.product.create({
+    const { stockInicial, ...rest } = dto;
+    const product = await this.prisma.product.create({
       data: {
-        ...dto,
+        ...rest,
         businessId,
-        stockActual: 0,
+        stockActual: stockInicial ?? 0,
         stockMinimo: dto.stockMinimo ?? 0,
         igvTipo: (dto.igvTipo as any) ?? 'gravado',
         isActive: dto.isActive ?? true,
       },
       include: { category: true },
     });
+
+    // Registrar movimiento de inventario si hay stock inicial
+    if (stockInicial && stockInicial > 0 && userId) {
+      await this.prisma.inventoryMovement.create({
+        data: {
+          businessId,
+          productId:     product.id,
+          userId,
+          tipo:          'ajuste_entrada' as any,
+          cantidad:      stockInicial,
+          stockAnterior: 0,
+          stockNuevo:    stockInicial,
+          costoUnitario: dto.precioCompra ?? null,
+          observaciones: 'Stock inicial al crear producto',
+          fecha:         new Date(),
+        },
+      });
+    }
+
+    return product;
   }
 
   async update(id: string, dto: UpdateProductDto, businessId: string) {

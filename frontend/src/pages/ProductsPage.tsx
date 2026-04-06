@@ -39,6 +39,7 @@ const schema = z.object({
   precioVenta:   z.string().min(1, 'El precio de venta es requerido'),
   igvTipo:       z.enum(['gravado', 'exonerado', 'inafecto']),
   stockMinimo:   z.string().optional(),
+  stockInicial:  z.string().optional(),
 });
 
 type FormData = z.infer<typeof schema>;
@@ -301,6 +302,7 @@ function ProductModal({ open, onClose, product, categories }: ProductModalProps)
       precioVenta:   parseFloat(data.precioVenta),
       precioCompra:  data.precioCompra  ? parseFloat(data.precioCompra)  : undefined,
       stockMinimo:   data.stockMinimo   ? parseFloat(data.stockMinimo)   : undefined,
+      stockInicial:  (!isEdit && data.stockInicial) ? parseFloat(data.stockInicial) : undefined,
       codigoInterno: data.codigoInterno || undefined,
       codigoBarras:  data.codigoBarras  || undefined,
       descripcion:   data.descripcion   || undefined,
@@ -408,13 +410,23 @@ function ProductModal({ open, onClose, product, categories }: ProductModalProps)
           />
         </div>
 
-        <Input
-          label="Stock mínimo"
-          type="number" step="0.01" min="0"
-          placeholder="0"
-          error={errors.stockMinimo?.message}
-          {...register('stockMinimo')}
-        />
+        <div className="grid grid-cols-2 gap-4">
+          <Input
+            label="Stock mínimo"
+            type="number" step="0.01" min="0"
+            placeholder="0"
+            error={errors.stockMinimo?.message}
+            {...register('stockMinimo')}
+          />
+          {!isEdit && (
+            <Input
+              label="Stock inicial"
+              type="number" step="0.01" min="0"
+              placeholder="0"
+              {...register('stockInicial')}
+            />
+          )}
+        </div>
 
         <Textarea
           label="Descripción"

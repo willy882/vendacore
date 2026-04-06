@@ -92,7 +92,7 @@ export class InventoryService {
           stockAnterior,
           stockNuevo,
           costoUnitario: dto.costoUnitario ?? null,
-          observaciones: dto.observaciones ?? dto.motivo ?? null,
+          observaciones: dto.observaciones ?? null,
           fecha: new Date(),
         },
       }),

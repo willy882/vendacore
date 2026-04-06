@@ -41,6 +41,9 @@ export class CreateProductDto {
   @IsNumber({ maxDecimalPlaces: 4 }) @Min(0) @Type(() => Number) @IsOptional()
   stockMinimo?: number;
 
+  @IsNumber({ maxDecimalPlaces: 4 }) @Min(0) @Type(() => Number) @IsOptional()
+  stockInicial?: number;
+
   @IsString() @IsOptional()
   imagenUrl?: string;
 

@@ -21,6 +21,7 @@ export interface CreateProductData {
   precioVenta:    number;
   igvTipo?:       'gravado' | 'exonerado' | 'inafecto';
   stockMinimo?:   number;
+  stockInicial?:  number;
 }
 
 export type UpdateProductData = Partial<CreateProductData> & { isActive?: boolean };

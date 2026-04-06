@@ -36,11 +36,11 @@ function AdjustModal({ open, onClose, products }: { open: boolean; onClose: () =
 
   const adjMut = useMutation({
     mutationFn: (d: AdjForm) => inventoryService.adjust({
-      productId:     d.productId,
-      tipo:          d.tipo,
-      cantidad:      parseFloat(d.cantidad),
-      motivo:        d.motivo || undefined,
-      costoUnitario: d.costoUnitario ? parseFloat(d.costoUnitario) : undefined,
+      productId:      d.productId,
+      tipo:           d.tipo,
+      cantidad:       parseFloat(d.cantidad),
+      observaciones:  d.motivo || undefined,
+      costoUnitario:  d.costoUnitario ? parseFloat(d.costoUnitario) : undefined,
     }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['products'] });
