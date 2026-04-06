@@ -120,9 +120,38 @@ export class SalesService {
       }
     }
 
-    // 4. Validar pagos
-    const totalPagado = dto.payments.reduce((acc, p) => acc + p.monto, 0);
-    if (dto.tipoVenta === 'contado' && totalPagado < total) {
+    // 4. Resolver paymentMethodIds (acepta ID real o tipo como 'efectivo', 'yape', etc.)
+    const resolvedPayments = await Promise.all(
+      (dto.payments ?? []).map(async (p) => {
+        // Verificar si existe como ID exacto
+        const byId = await this.prisma.paymentMethod.findFirst({
+          where: { id: p.paymentMethodId, businessId },
+        });
+        if (byId) return { ...p, paymentMethodId: byId.id };
+
+        // Si no existe, buscarlo por tipo (para los defaults del frontend)
+        const byTipo = await this.prisma.paymentMethod.findFirst({
+          where: { tipo: p.paymentMethodId as any, businessId },
+        });
+        if (byTipo) return { ...p, paymentMethodId: byTipo.id };
+
+        // Crear si no existe
+        const created = await this.prisma.paymentMethod.create({
+          data: {
+            id:         `${businessId}-${p.paymentMethodId}`,
+            nombre:     p.paymentMethodId.charAt(0).toUpperCase() + p.paymentMethodId.slice(1),
+            tipo:       p.paymentMethodId as any,
+            businessId,
+            isActive:   true,
+          },
+        });
+        return { ...p, paymentMethodId: created.id };
+      }),
+    );
+
+    // 4b. Validar pagos
+    const totalPagado = resolvedPayments.reduce((acc, p) => acc + p.monto, 0);
+    if (dto.tipoVenta === 'contado' && resolvedPayments.length > 0 && totalPagado < total) {
       throw new BadRequestException(
         `Pago insuficiente. Total: ${total.toFixed(2)}, pagado: ${totalPagado.toFixed(2)}`,
       );
@@ -154,7 +183,7 @@ export class SalesService {
             create: itemsCalc,
           },
           payments: {
-            create: dto.payments.map((p) => ({
+            create: resolvedPayments.map((p) => ({
               paymentMethodId: p.paymentMethodId,
               monto: p.monto,
               referencia: p.referencia ?? null,

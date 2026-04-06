@@ -25,7 +25,7 @@ export class SaleItemDto {
 }
 
 export class SalePaymentDto {
-  @IsUUID()
+  @IsString() @IsNotEmpty()
   paymentMethodId: string;
 
   @IsNumber({ maxDecimalPlaces: 2 }) @Min(0.01) @Type(() => Number)
@@ -39,7 +39,7 @@ export class CreateSaleDto {
   @IsArray() @ArrayMinSize(1) @ValidateNested({ each: true }) @Type(() => SaleItemDto)
   items: SaleItemDto[];
 
-  @IsArray() @ArrayMinSize(1) @ValidateNested({ each: true }) @Type(() => SalePaymentDto)
+  @IsArray() @ValidateNested({ each: true }) @Type(() => SalePaymentDto)
   payments: SalePaymentDto[];
 
   @IsEnum(TipoVenta) @IsOptional()
