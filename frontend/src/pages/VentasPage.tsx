@@ -208,6 +208,20 @@ function PayModal({ open, onClose, total, cart, paymentMethods, onConfirm, loadi
                       value={p.monto}
                       onChange={(e) => updateLine(i, 'monto', e.target.value)}
                     />
+                    {/* Info de pago según método */}
+                    {p.nombre.toLowerCase() === 'yape' && (
+                      <div className="rounded-lg overflow-hidden border border-purple-200 bg-purple-50 p-2 flex flex-col items-center gap-1">
+                        <img src="/yape-qr.png" alt="QR Yape" className="w-36 h-36 object-contain rounded" />
+                        <p className="text-xs text-purple-700 font-medium">Escanea para pagar con Yape</p>
+                      </div>
+                    )}
+                    {p.nombre.toLowerCase() === 'plin' && (
+                      <div className="rounded-lg border border-sky-200 bg-sky-50 p-3 text-center">
+                        <p className="text-xs text-sky-600 mb-0.5">Número Plin</p>
+                        <p className="text-lg font-bold text-sky-700 tracking-widest">928 141 669</p>
+                        <p className="text-xs text-sky-500">Envía el monto exacto</p>
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>
