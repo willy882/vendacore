@@ -47,7 +47,7 @@ export class SuppliersService {
   async create(dto: CreateSupplierDto, businessId: string) {
     if (dto.ruc) {
       const dup = await this.prisma.supplier.findFirst({
-        where: { ruc: dto.ruc, businessId },
+        where: { ruc: dto.ruc, businessId, isActive: true },
       });
       if (dup) throw new ConflictException('Ya existe un proveedor con ese RUC');
     }
@@ -60,7 +60,7 @@ export class SuppliersService {
     await this.findOne(id, businessId);
     if (dto.ruc) {
       const dup = await this.prisma.supplier.findFirst({
-        where: { ruc: dto.ruc, businessId, NOT: { id } },
+        where: { ruc: dto.ruc, businessId, isActive: true, NOT: { id } },
       });
       if (dup) throw new ConflictException('RUC ya en uso por otro proveedor');
     }
