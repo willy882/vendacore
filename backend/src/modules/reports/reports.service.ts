@@ -69,9 +69,11 @@ function addPdfHeader(
 }
 
 function addPdfFooter(doc: PDFKit.PDFDocument) {
-  const bottom = doc.page.height - 40;
+  doc.moveDown(1);
+  doc.moveTo(40, doc.y).lineTo(doc.page.width - 40, doc.y).strokeColor('#E2E8F0').stroke();
+  doc.moveDown(0.5);
   doc.fontSize(7).fillColor('#94A3B8')
-    .text(`Generado: ${new Date().toLocaleString('es-PE')} | VendaCore`, 40, bottom, {
+    .text(`Generado: ${new Date().toLocaleString('es-PE')} | VendaCore`, {
       align: 'center', width: doc.page.width - 80,
     });
 }
@@ -94,6 +96,15 @@ function pdfTable(
     x += colWidths[i];
   });
   y += rowH;
+
+  if (rows.length === 0) {
+    doc.rect(startX, y, colWidths.reduce((a, b) => a + b, 0), rowH).fill('#F8FAFC');
+    doc.fillColor('#94A3B8').fontSize(9).font('Helvetica')
+      .text('Sin datos en el período seleccionado', startX + 4, y + 5, {
+        width: colWidths.reduce((a, b) => a + b, 0) - 8, lineBreak: false,
+      });
+    y += rowH;
+  }
 
   rows.forEach((row, ri) => {
     if (y + rowH > doc.page.height - 60) {
