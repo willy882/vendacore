@@ -162,6 +162,40 @@ export class PurchasesService {
     return updated;
   }
 
+  async remove(id: string, businessId: string) {
+    const purchase = await this.findOne(id, businessId);
+
+    await this.prisma.$transaction(async (tx) => {
+      // Revertir stock: descontar lo que entró al inventario
+      for (const item of purchase.items) {
+        await tx.product.update({
+          where: { id: item.productId },
+          data: { stockActual: { decrement: item.cantidad } },
+        });
+        // Eliminar movimientos de inventario asociados
+        await tx.inventoryMovement.deleteMany({
+          where: { referenciaId: id, referenciaTipo: 'purchase' },
+        });
+      }
+
+      // Revertir deuda del proveedor si no estaba pagado
+      if (purchase.estadoPago !== 'pagado') {
+        const deuda = purchase.estadoPago === 'parcial'
+          ? Number(purchase.total) / 2
+          : Number(purchase.total);
+        await tx.supplier.update({
+          where: { id: purchase.supplierId },
+          data: { deudaPendiente: { decrement: deuda } },
+        });
+      }
+
+      await tx.purchaseItem.deleteMany({ where: { purchaseId: id } });
+      await tx.purchase.delete({ where: { id } });
+    });
+
+    return { message: 'Compra eliminada' };
+  }
+
   async getPendingPayments(businessId: string) {
     return this.prisma.purchase.findMany({
       where: { businessId, estadoPago: { in: ['pendiente', 'parcial'] } },

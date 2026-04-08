@@ -1,5 +1,5 @@
 import {
-  Controller, Get, Post, Patch, Param, Body,
+  Controller, Get, Post, Patch, Delete, Param, Body,
   Query, UseGuards, ParseUUIDPipe,
 } from '@nestjs/common';
 import { PurchasesService } from './purchases.service';
@@ -49,5 +49,11 @@ export class PurchasesController {
   @Roles('administrador', 'supervisor', 'contabilidad')
   markAsPaid(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: any) {
     return this.service.markAsPaid(id, user.businessId);
+  }
+
+  @Delete(':id')
+  @Roles('administrador')
+  remove(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: any) {
+    return this.service.remove(id, user.businessId);
   }
 }
