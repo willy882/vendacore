@@ -4,7 +4,7 @@ import { InventoryService } from '../inventory/inventory.service';
 import { CreatePurchaseDto } from './dto/create-purchase.dto';
 import { Prisma } from '@prisma/client';
 
-const IGV_RATE = 0.18;
+const IGV_RATE = 0; // Zona de selva — exonerado de IGV
 
 @Injectable()
 export class PurchasesService {
