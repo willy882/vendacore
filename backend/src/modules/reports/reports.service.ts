@@ -96,14 +96,11 @@ function addPdfHeader(
 
 function addPdfFooter(doc: PDFKit.PDFDocument) {
   const pageW = doc.page.width;
-  const footerY = doc.page.height - 30;
-  doc.moveTo(40, footerY).lineTo(pageW - 40, footerY).strokeColor('#E2E8F0').stroke();
+  doc.moveDown(1);
+  doc.moveTo(40, doc.y).lineTo(pageW - 40, doc.y).strokeColor('#E2E8F0').stroke();
+  doc.moveDown(0.4);
   doc.fontSize(7).fillColor('#94A3B8').font('Helvetica')
-    .text(
-      `Generado: ${new Date().toLocaleString('es-PE')} | VendaCore`,
-      40, footerY + 6,
-      { align: 'center', width: pageW - 80, lineBreak: false },
-    );
+    .text(`Generado: ${new Date().toLocaleString('es-PE')} | VendaCore`, { align: 'center' });
 }
 
 function pdfTable(
