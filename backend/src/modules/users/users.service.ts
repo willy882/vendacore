@@ -91,6 +91,7 @@ export class UsersService {
     if (dto.newPassword) {
       updateData.passwordHash = await bcrypt.hash(dto.newPassword, BCRYPT_ROUNDS);
     }
+    if (dto.avatarUrl !== undefined) updateData.avatarUrl = dto.avatarUrl;
 
     const user = await this.prisma.user.update({
       where: { id },

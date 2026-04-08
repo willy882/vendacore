@@ -8,4 +8,8 @@ export class UpdateUserDto extends PartialType(CreateUserDto) {
   @MaxLength(100)
   @IsOptional()
   newPassword?: string;
+
+  @IsString()
+  @IsOptional()
+  avatarUrl?: string;
 }

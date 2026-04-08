@@ -88,6 +88,7 @@ model User {
   isActive            Boolean   @default(true)
   twoFactorEnabled    Boolean   @default(false)
   twoFactorSecret     String?
+  avatarUrl           String?
   failedLoginAttempts Int       @default(0)
   lockedUntil         DateTime?
   lastLogin           DateTime?
