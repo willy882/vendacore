@@ -50,6 +50,26 @@ function addWorkbookMeta(wb: ExcelJS.Workbook, title: string, businessName: stri
 
 // ─── PDF helpers ─────────────────────────────────────────────────────────────
 
+/** Genera un PDF en memoria y retorna el Buffer completo */
+async function buildPdf(
+  options: PDFKit.PDFDocumentOptions,
+  build: (doc: PDFKit.PDFDocument) => void,
+): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const doc = new PDFDocument(options);
+    const chunks: Buffer[] = [];
+    doc.on('data', (chunk: Buffer) => chunks.push(chunk));
+    doc.on('end', () => resolve(Buffer.concat(chunks)));
+    doc.on('error', reject);
+    try {
+      build(doc);
+      doc.end();
+    } catch (err) {
+      reject(err);
+    }
+  });
+}
+
 function addPdfHeader(
   doc: PDFKit.PDFDocument,
   title: string,
@@ -57,25 +77,33 @@ function addPdfHeader(
   from?: string,
   to?: string,
 ) {
-  doc.rect(0, 0, doc.page.width, 70).fill('#1E40AF');
-  doc.fillColor('#FFFFFF').fontSize(20).font('Helvetica-Bold')
-    .text('VendaCore', 40, 15, { lineBreak: false });
-  doc.fontSize(11).font('Helvetica').text(title, 40, 42, { lineBreak: false });
-  doc.fillColor('#FFFFFF').fontSize(9).text(businessName, { align: 'right' });
+  const pageW = doc.page.width;
+  doc.rect(0, 0, pageW, 70).fill('#1E40AF');
+  doc.fillColor('#FFFFFF').fontSize(18).font('Helvetica-Bold')
+    .text('VendaCore', 40, 16, { lineBreak: false });
+  doc.fontSize(10).font('Helvetica')
+    .text(title, 40, 44, { lineBreak: false });
+  doc.fontSize(8).font('Helvetica')
+    .text(businessName, 0, 16, { align: 'right', width: pageW - 40, lineBreak: false });
   if (from && to) {
-    doc.fillColor('#BFDBFE').fontSize(8).text(`Período: ${from} — ${to}`, { align: 'right' });
+    doc.fillColor('#BFDBFE').fontSize(7)
+      .text(`Período: ${from} — ${to}`, 0, 30, { align: 'right', width: pageW - 40, lineBreak: false });
   }
-  doc.fillColor('#000000').moveDown(3);
+  // Avanzar el cursor por debajo del header
+  doc.fillColor('#000000').font('Helvetica').fontSize(10);
+  doc.y = 90;
 }
 
 function addPdfFooter(doc: PDFKit.PDFDocument) {
-  doc.moveDown(1);
-  doc.moveTo(40, doc.y).lineTo(doc.page.width - 40, doc.y).strokeColor('#E2E8F0').stroke();
-  doc.moveDown(0.5);
-  doc.fontSize(7).fillColor('#94A3B8')
-    .text(`Generado: ${new Date().toLocaleString('es-PE')} | VendaCore`, {
-      align: 'center', width: doc.page.width - 80,
-    });
+  const pageW = doc.page.width;
+  const footerY = doc.page.height - 30;
+  doc.moveTo(40, footerY).lineTo(pageW - 40, footerY).strokeColor('#E2E8F0').stroke();
+  doc.fontSize(7).fillColor('#94A3B8').font('Helvetica')
+    .text(
+      `Generado: ${new Date().toLocaleString('es-PE')} | VendaCore`,
+      40, footerY + 6,
+      { align: 'center', width: pageW - 80, lineBreak: false },
+    );
 }
 
 function pdfTable(
@@ -85,10 +113,14 @@ function pdfTable(
   colWidths: number[],
 ) {
   const startX = 40;
+  const tableW = colWidths.reduce((a, b) => a + b, 0);
+  const rowH   = 20;
+  const pageH  = doc.page.height;
+  const margin = 50; // espacio reservado para footer
   let y = doc.y + 4;
-  const rowH = 20;
 
-  doc.rect(startX, y, colWidths.reduce((a, b) => a + b, 0), rowH).fill('#1E40AF');
+  // ── Cabecera de tabla ──
+  doc.rect(startX, y, tableW, rowH).fill('#1E40AF');
   let x = startX;
   headers.forEach((h, i) => {
     doc.fillColor('#FFFFFF').fontSize(8.5).font('Helvetica-Bold')
@@ -97,23 +129,35 @@ function pdfTable(
   });
   y += rowH;
 
+  // ── Sin datos ──
   if (rows.length === 0) {
-    doc.rect(startX, y, colWidths.reduce((a, b) => a + b, 0), rowH).fill('#F8FAFC');
+    doc.rect(startX, y, tableW, rowH).fill('#F8FAFC');
     doc.fillColor('#94A3B8').fontSize(9).font('Helvetica')
       .text('Sin datos en el período seleccionado', startX + 4, y + 5, {
-        width: colWidths.reduce((a, b) => a + b, 0) - 8, lineBreak: false,
+        width: tableW - 8, lineBreak: false,
       });
     y += rowH;
+    doc.y = y + 8;
+    return;
   }
 
+  // ── Filas ──
   rows.forEach((row, ri) => {
-    if (y + rowH > doc.page.height - 60) {
-      addPdfFooter(doc);
+    if (y + rowH > pageH - margin) {
       doc.addPage();
       y = 50;
+      // Repetir cabecera en nueva página
+      doc.rect(startX, y, tableW, rowH).fill('#1E40AF');
+      x = startX;
+      headers.forEach((h, i) => {
+        doc.fillColor('#FFFFFF').fontSize(8.5).font('Helvetica-Bold')
+          .text(h, x + 4, y + 5, { width: colWidths[i] - 8, lineBreak: false });
+        x += colWidths[i];
+      });
+      y += rowH;
     }
     const bg = ri % 2 === 0 ? '#FFFFFF' : '#EFF6FF';
-    doc.rect(startX, y, colWidths.reduce((a, b) => a + b, 0), rowH).fill(bg);
+    doc.rect(startX, y, tableW, rowH).fill(bg);
     x = startX;
     row.forEach((cell, i) => {
       doc.fillColor('#1E293B').fontSize(8).font('Helvetica')
@@ -534,45 +578,45 @@ export class ReportsService {
       this.getBusinessName(businessId),
     ]);
 
-    const doc = new PDFDocument({ margin: 40, size: 'A4', layout: 'landscape' });
-    res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition',
-      `attachment; filename="ventas_${from.toISOString().split('T')[0]}.pdf"`);
-    doc.pipe(res);
+    const buf = await buildPdf({ margin: 40, size: 'A4', layout: 'landscape' }, (doc) => {
+      addPdfHeader(doc, 'REPORTE DE VENTAS', businessName, fmtDate(from), fmtDate(to));
 
-    addPdfHeader(doc, 'REPORTE DE VENTAS', businessName, fmtDate(from), fmtDate(to));
+      const totalVentas = sales.reduce((a, s) => a + Number(s.total), 0);
+      const totalIgv    = sales.reduce((a, s) => a + Number(s.igv ?? 0), 0);
+      const ticket      = sales.length > 0 ? totalVentas / sales.length : 0;
 
-    const totalVentas = sales.reduce((a, s) => a + Number(s.total), 0);
-    const totalIgv    = sales.reduce((a, s) => a + Number(s.igv ?? 0), 0);
-    const ticket      = sales.length > 0 ? totalVentas / sales.length : 0;
+      doc.fontSize(10).fillColor('#1E293B')
+        .text(
+          `Total: S/ ${fmt(totalVentas)}   |   Transacciones: ${sales.length}   |   ` +
+          `Ticket Promedio: S/ ${fmt(ticket)}   |   IGV: S/ ${fmt(totalIgv)}`,
+          { align: 'center' },
+        );
+      doc.moveDown(0.5);
 
-    doc.fontSize(10).fillColor('#1E293B')
-      .text(
-        `Total: S/ ${fmt(totalVentas)}   |   Transacciones: ${sales.length}   |   ` +
-        `Ticket Promedio: S/ ${fmt(ticket)}   |   IGV: S/ ${fmt(totalIgv)}`,
-        { align: 'center' },
+      pdfTable(
+        doc,
+        ['Fecha', 'Comprobante', 'Cliente', 'Vendedor', 'Tipo', 'Subtotal', 'IGV', 'Desc.', 'Total'],
+        sales.map((s) => [
+          fmtDate(s.fecha),
+          s.electronicDocuments?.[0]?.numeroCompleto ?? '—',
+          (s.customer?.nombreCompleto ?? 'Consumidor Final').substring(0, 22),
+          s.user ? `${s.user.nombre} ${s.user.apellido[0] ?? ''}.` : '—',
+          s.tipoVenta,
+          `S/ ${fmt(Number(s.subtotal ?? 0))}`,
+          `S/ ${fmt(Number(s.igv ?? 0))}`,
+          `S/ ${fmt(Number(s.descuentoTotal ?? 0))}`,
+          `S/ ${fmt(Number(s.total))}`,
+        ]),
+        [62, 80, 120, 80, 55, 68, 55, 55, 70],
       );
-    doc.moveDown(0.5);
 
-    pdfTable(
-      doc,
-      ['Fecha', 'Comprobante', 'Cliente', 'Vendedor', 'Tipo', 'Subtotal', 'IGV', 'Desc.', 'Total'],
-      sales.map((s) => [
-        fmtDate(s.fecha),
-        s.electronicDocuments?.[0]?.numeroCompleto ?? '—',
-        (s.customer?.nombreCompleto ?? 'Consumidor Final').substring(0, 22),
-        s.user ? `${s.user.nombre} ${s.user.apellido[0]}.` : '—',
-        s.tipoVenta,
-        `S/ ${fmt(Number(s.subtotal ?? 0))}`,
-        `S/ ${fmt(Number(s.igv ?? 0))}`,
-        `S/ ${fmt(Number(s.descuentoTotal ?? 0))}`,
-        `S/ ${fmt(Number(s.total))}`,
-      ]),
-      [62, 80, 120, 80, 55, 68, 55, 55, 70],
-    );
+      addPdfFooter(doc);
+    });
 
-    addPdfFooter(doc);
-    doc.end();
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="ventas_${from.toISOString().split('T')[0]}.pdf"`);
+    res.setHeader('Content-Length', buf.length);
+    res.end(buf);
   }
 
   // ── PDF: Inventario ───────────────────────────────────────────────────────
@@ -583,50 +627,50 @@ export class ReportsService {
       this.getBusinessName(businessId),
     ]);
 
-    const doc = new PDFDocument({ margin: 40, size: 'A4', layout: 'landscape' });
-    res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition',
-      `attachment; filename="inventario_${new Date().toISOString().split('T')[0]}.pdf"`);
-    doc.pipe(res);
+    const buf = await buildPdf({ margin: 40, size: 'A4', layout: 'landscape' }, (doc) => {
+      addPdfHeader(doc, 'REPORTE DE INVENTARIO', businessName);
 
-    addPdfHeader(doc, 'REPORTE DE INVENTARIO', businessName);
+      const totalValorizado = products.reduce((a, p) => {
+        return a + Number(p.stockActual) * Number(p.precioCompra ?? 0);
+      }, 0);
+      const criticos = products.filter((p) => Number(p.stockActual) <= Number(p.stockMinimo)).length;
 
-    const totalValorizado = products.reduce((a, p) => {
-      return a + Number(p.stockActual) * Number(p.precioCompra ?? 0);
-    }, 0);
-    const criticos = products.filter((p) => Number(p.stockActual) <= Number(p.stockMinimo)).length;
+      doc.fontSize(10).fillColor('#1E293B')
+        .text(
+          `Productos: ${products.length}   |   Stock Crítico: ${criticos}   |   ` +
+          `Valor Inventario: S/ ${fmt(totalValorizado)}`,
+          { align: 'center' },
+        );
+      doc.moveDown(0.5);
 
-    doc.fontSize(10).fillColor('#1E293B')
-      .text(
-        `Productos: ${products.length}   |   Stock Crítico: ${criticos}   |   ` +
-        `Valor Inventario: S/ ${fmt(totalValorizado)}`,
-        { align: 'center' },
+      pdfTable(
+        doc,
+        ['Código', 'Producto', 'Categoría', 'Stock', 'Mínimo', 'Estado', 'Costo Unit.', 'Precio Vta.', 'Valorizado'],
+        products.map((p) => {
+          const stock = Number(p.stockActual);
+          const costo = Number(p.precioCompra ?? 0);
+          return [
+            p.codigoInterno ?? '—',
+            p.nombre.substring(0, 26),
+            (p.category?.nombre ?? '—').substring(0, 14),
+            stock,
+            Number(p.stockMinimo),
+            stock <= Number(p.stockMinimo) ? 'CRÍTICO' : 'Normal',
+            `S/ ${fmt(costo)}`,
+            `S/ ${fmt(Number(p.precioVenta))}`,
+            `S/ ${fmt(stock * costo)}`,
+          ];
+        }),
+        [62, 140, 80, 46, 52, 55, 70, 72, 73],
       );
-    doc.moveDown(0.5);
 
-    pdfTable(
-      doc,
-      ['Código', 'Producto', 'Categoría', 'Stock', 'Mínimo', 'Estado', 'Costo Unit.', 'Precio Vta.', 'Valorizado'],
-      products.map((p) => {
-        const stock = Number(p.stockActual);
-        const costo = Number(p.precioCompra ?? 0);
-        return [
-          p.codigoInterno ?? '—',
-          p.nombre.substring(0, 26),
-          (p.category?.nombre ?? '—').substring(0, 14),
-          stock,
-          Number(p.stockMinimo),
-          stock <= Number(p.stockMinimo) ? 'CRÍTICO' : 'Normal',
-          `S/ ${fmt(costo)}`,
-          `S/ ${fmt(Number(p.precioVenta))}`,
-          `S/ ${fmt(stock * costo)}`,
-        ];
-      }),
-      [62, 140, 80, 46, 52, 55, 70, 72, 73],
-    );
+      addPdfFooter(doc);
+    });
 
-    addPdfFooter(doc);
-    doc.end();
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="inventario_${new Date().toISOString().split('T')[0]}.pdf"`);
+    res.setHeader('Content-Length', buf.length);
+    res.end(buf);
   }
 
   // ── PDF: Gastos ───────────────────────────────────────────────────────────
@@ -637,34 +681,34 @@ export class ReportsService {
       this.getBusinessName(businessId),
     ]);
 
-    const doc = new PDFDocument({ margin: 40, size: 'A4' });
+    const buf = await buildPdf({ margin: 40, size: 'A4' }, (doc) => {
+      addPdfHeader(doc, 'REPORTE DE GASTOS', businessName, fmtDate(from), fmtDate(to));
+
+      const total = expenses.reduce((a, e) => a + Number(e.monto), 0);
+      doc.fontSize(10).fillColor('#1E293B')
+        .text(`Total Gastos: S/ ${fmt(total)}   |   Registros: ${expenses.length}`, { align: 'center' });
+      doc.moveDown(0.5);
+
+      pdfTable(
+        doc,
+        ['Fecha', 'Categoría', 'Descripción', 'Monto', 'Observaciones'],
+        expenses.map((e) => [
+          fmtDate(e.fecha),
+          (e.category?.nombre ?? 'Sin cat.').substring(0, 18),
+          e.descripcion.substring(0, 32),
+          `S/ ${fmt(Number(e.monto))}`,
+          (e.observaciones ?? '—').substring(0, 24),
+        ]),
+        [65, 105, 175, 80, 130],
+      );
+
+      addPdfFooter(doc);
+    });
+
     res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition',
-      `attachment; filename="gastos_${from.toISOString().split('T')[0]}.pdf"`);
-    doc.pipe(res);
-
-    addPdfHeader(doc, 'REPORTE DE GASTOS', businessName, fmtDate(from), fmtDate(to));
-
-    const total = expenses.reduce((a, e) => a + Number(e.monto), 0);
-    doc.fontSize(10).fillColor('#1E293B')
-      .text(`Total Gastos: S/ ${fmt(total)}   |   Registros: ${expenses.length}`, { align: 'center' });
-    doc.moveDown(0.5);
-
-    pdfTable(
-      doc,
-      ['Fecha', 'Categoría', 'Descripción', 'Monto', 'Observaciones'],
-      expenses.map((e) => [
-        fmtDate(e.fecha),
-        (e.category?.nombre ?? 'Sin cat.').substring(0, 18),
-        e.descripcion.substring(0, 32),
-        `S/ ${fmt(Number(e.monto))}`,
-        (e.observaciones ?? '—').substring(0, 24),
-      ]),
-      [65, 105, 175, 80, 130],
-    );
-
-    addPdfFooter(doc);
-    doc.end();
+    res.setHeader('Content-Disposition', `attachment; filename="gastos_${from.toISOString().split('T')[0]}.pdf"`);
+    res.setHeader('Content-Length', buf.length);
+    res.end(buf);
   }
 
   // ── PDF: Comprobantes SUNAT ───────────────────────────────────────────────
@@ -675,36 +719,36 @@ export class ReportsService {
       this.getBusinessName(businessId),
     ]);
 
-    const doc = new PDFDocument({ margin: 40, size: 'A4', layout: 'landscape' });
+    const buf = await buildPdf({ margin: 40, size: 'A4', layout: 'landscape' }, (doc) => {
+      addPdfHeader(doc, 'REPORTE DE COMPROBANTES SUNAT', businessName, fmtDate(from), fmtDate(to));
+
+      const total = documents.reduce((a, d) => a + Number(d.total ?? 0), 0);
+      doc.fontSize(10).fillColor('#1E293B')
+        .text(`Total Comprobantes: ${documents.length}   |   Monto Total: S/ ${fmt(total)}`, { align: 'center' });
+      doc.moveDown(0.5);
+
+      pdfTable(
+        doc,
+        ['Fecha', 'Tipo', 'N° Completo', 'Cliente', 'Doc. Cliente', 'Estado', 'Total', 'Enviado SUNAT'],
+        documents.map((d) => [
+          fmtDate(d.createdAt),
+          d.tipo,
+          d.numeroCompleto,
+          (d.customer?.nombreCompleto ?? 'Consumidor Final').substring(0, 22),
+          d.customer?.numeroDocumento ?? '—',
+          d.estado,
+          `S/ ${fmt(Number(d.total ?? 0))}`,
+          d.fechaEnvio ? fmtDate(d.fechaEnvio) : 'Pendiente',
+        ]),
+        [60, 55, 80, 120, 70, 65, 65, 85],
+      );
+
+      addPdfFooter(doc);
+    });
+
     res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition',
-      `attachment; filename="comprobantes_${from.toISOString().split('T')[0]}.pdf"`);
-    doc.pipe(res);
-
-    addPdfHeader(doc, 'REPORTE DE COMPROBANTES SUNAT', businessName, fmtDate(from), fmtDate(to));
-
-    const total = documents.reduce((a, d) => a + Number(d.total ?? 0), 0);
-    doc.fontSize(10).fillColor('#1E293B')
-      .text(`Total Comprobantes: ${documents.length}   |   Monto Total: S/ ${fmt(total)}`, { align: 'center' });
-    doc.moveDown(0.5);
-
-    pdfTable(
-      doc,
-      ['Fecha', 'Tipo', 'N° Completo', 'Cliente', 'Doc. Cliente', 'Estado', 'Total', 'Enviado SUNAT'],
-      documents.map((d) => [
-        fmtDate(d.createdAt),
-        d.tipo,
-        d.numeroCompleto,
-        (d.customer?.nombreCompleto ?? 'Consumidor Final').substring(0, 22),
-        d.customer?.numeroDocumento ?? '—',
-        d.estado,
-        `S/ ${fmt(Number(d.total ?? 0))}`,
-        d.fechaEnvio ? fmtDate(d.fechaEnvio) : 'Pendiente',
-      ]),
-      [60, 55, 80, 120, 70, 65, 65, 85],
-    );
-
-    addPdfFooter(doc);
-    doc.end();
+    res.setHeader('Content-Disposition', `attachment; filename="comprobantes_${from.toISOString().split('T')[0]}.pdf"`);
+    res.setHeader('Content-Length', buf.length);
+    res.end(buf);
   }
 }
