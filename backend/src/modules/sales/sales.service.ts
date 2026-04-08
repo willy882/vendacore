@@ -342,6 +342,11 @@ export class SalesService {
           data: { creditoUsado: { decrement: Number(sale.saldoPendiente) } },
         });
       }
+
+      // Revertir movimiento de caja: eliminar el ingreso original
+      await tx.cashMovement.deleteMany({
+        where: { saleId: id },
+      });
     });
 
     // Revertir stock (devolucion)
