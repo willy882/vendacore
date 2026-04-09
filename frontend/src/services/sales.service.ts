@@ -54,4 +54,13 @@ export const salesService = {
 
   getPaymentMethods: () =>
     api.get('/sales/payment-methods').then((r) => r.data),
+
+  getPendingCredit: (page = 1, limit = 50) =>
+    api.get('/sales/pending-credit', { params: { page, limit } }).then((r) => r.data),
+
+  registerCreditPayment: (id: string, data: { monto: number; paymentMethodId: string; referencia?: string }) =>
+    api.post(`/sales/${id}/credit-payment`, data).then((r) => r.data),
+
+  processReturn: (id: string, data: { items: { saleItemId: string; cantidad: number }[]; motivo: string }) =>
+    api.post(`/sales/${id}/return`, data).then((r) => r.data),
 };
