@@ -9,6 +9,8 @@ export interface BusinessInfo {
   telefono?: string;
   email?: string;
   logoUrl?: string;
+  nubefactToken?: string;
+  sunatMode?: string;
 }
 
 export interface PaymentMethod {

@@ -4,6 +4,7 @@ import { useForm } from 'react-hook-form';
 import {
   Building2, Phone, Mail, MapPin, Camera, Save,
   CreditCard, Plus, Pencil, Check, X, ToggleLeft, ToggleRight,
+  FileText, Eye, EyeOff, ExternalLink,
 } from 'lucide-react';
 import { businessService } from '@/services/business.service';
 import { Card } from '@/components/ui/Card';
@@ -269,6 +270,137 @@ function PaymentMethodsSection() {
   );
 }
 
+// ── Sección SUNAT / OSE ───────────────────────────────────────────────────────
+
+function SunatSection() {
+  const qc = useQueryClient();
+  const [showToken, setShowToken] = useState(false);
+  const [token, setToken] = useState('');
+  const [mode, setMode] = useState<'demo' | 'produccion'>('demo');
+  const [saved, setSaved] = useState(false);
+  const [err, setErr] = useState('');
+
+  const { data: biz, isLoading } = useQuery({
+    queryKey: ['business-me'],
+    queryFn: businessService.getMe,
+  });
+
+  useEffect(() => {
+    if (biz) {
+      setToken((biz as any).nubefactToken ?? '');
+      setMode(((biz as any).sunatMode ?? 'demo') as 'demo' | 'produccion');
+    }
+  }, [biz]);
+
+  const mut = useMutation({
+    mutationFn: () => businessService.updateMe({ nubefactToken: token, sunatMode: mode }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['business-me'] });
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2500);
+    },
+    onError: () => setErr('Error al guardar configuración'),
+  });
+
+  if (isLoading) return null;
+
+  return (
+    <Card className="space-y-5">
+      <div className="flex items-center gap-2 pb-1 border-b border-slate-100">
+        <div className="w-9 h-9 rounded-lg bg-red-50 flex items-center justify-center">
+          <FileText size={18} className="text-red-600" />
+        </div>
+        <div>
+          <h2 className="text-sm font-semibold text-slate-800">SUNAT / OSE (Nubefact)</h2>
+          <p className="text-xs text-slate-500">Configura tu token para enviar comprobantes electrónicos</p>
+        </div>
+      </div>
+
+      {/* Modo demo / producción */}
+      <div>
+        <p className="text-xs font-medium text-slate-600 mb-2">Modo de operación</p>
+        <div className="flex gap-2">
+          <button
+            onClick={() => setMode('demo')}
+            className={`flex-1 py-2.5 px-4 rounded-lg border text-sm font-medium transition-colors ${
+              mode === 'demo'
+                ? 'bg-amber-50 border-amber-400 text-amber-700'
+                : 'border-slate-200 text-slate-500 hover:bg-slate-50'
+            }`}
+          >
+            🧪 Demo / Pruebas
+          </button>
+          <button
+            onClick={() => setMode('produccion')}
+            className={`flex-1 py-2.5 px-4 rounded-lg border text-sm font-medium transition-colors ${
+              mode === 'produccion'
+                ? 'bg-emerald-50 border-emerald-400 text-emerald-700'
+                : 'border-slate-200 text-slate-500 hover:bg-slate-50'
+            }`}
+          >
+            🚀 Producción (SUNAT real)
+          </button>
+        </div>
+        {mode === 'demo' && (
+          <p className="text-xs text-amber-600 mt-1.5 bg-amber-50 border border-amber-200 rounded px-2 py-1">
+            Los comprobantes en modo Demo NO son válidos ante SUNAT. Úsalos solo para pruebas.
+          </p>
+        )}
+        {mode === 'produccion' && (
+          <p className="text-xs text-emerald-700 mt-1.5 bg-emerald-50 border border-emerald-200 rounded px-2 py-1">
+            Los comprobantes serán enviados a SUNAT y tendrán validez legal.
+          </p>
+        )}
+      </div>
+
+      {/* Token */}
+      <div>
+        <label className="block text-xs font-medium text-slate-600 mb-1">Token API de Nubefact</label>
+        <div className="relative">
+          <input
+            type={showToken ? 'text' : 'password'}
+            value={token}
+            onChange={(e) => setToken(e.target.value)}
+            placeholder="Pega aquí tu token de Nubefact..."
+            className="w-full px-3 py-2 pr-10 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono"
+          />
+          <button
+            type="button"
+            onClick={() => setShowToken(!showToken)}
+            className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+          >
+            {showToken ? <EyeOff size={15} /> : <Eye size={15} />}
+          </button>
+        </div>
+        <p className="text-xs text-slate-400 mt-1">
+          Obtén tu token en{' '}
+          <a href="https://nubefact.com" target="_blank" rel="noopener noreferrer"
+            className="text-blue-500 hover:underline inline-flex items-center gap-0.5">
+            nubefact.com <ExternalLink size={10} />
+          </a>{' '}
+          → Panel → API
+        </p>
+      </div>
+
+      {err && <p className="text-sm text-red-600 bg-red-50 border border-red-200 rounded px-3 py-2">{err}</p>}
+
+      <div className="flex items-center gap-3">
+        <Button
+          onClick={() => { setErr(''); mut.mutate(); }}
+          loading={mut.isPending}
+          icon={saved ? <Check size={15} /> : <Save size={15} />}
+          className={saved ? 'bg-emerald-600 hover:bg-emerald-700' : ''}
+        >
+          {saved ? 'Guardado' : 'Guardar configuración'}
+        </Button>
+        {!token && (
+          <p className="text-xs text-slate-400">Sin token → los comprobantes no se podrán enviar a SUNAT</p>
+        )}
+      </div>
+    </Card>
+  );
+}
+
 // ── Página principal ──────────────────────────────────────────────────────────
 
 export default function ConfiguracionPage() {
@@ -280,6 +412,7 @@ export default function ConfiguracionPage() {
       </div>
       <BusinessInfoSection />
       <PaymentMethodsSection />
+      <SunatSection />
     </div>
   );
 }

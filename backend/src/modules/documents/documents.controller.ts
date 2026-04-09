@@ -3,6 +3,7 @@ import {
   UseGuards, ParseUUIDPipe,
 } from '@nestjs/common';
 import { DocumentsService } from './documents.service';
+import { SunatService } from './sunat.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { Roles } from '../../common/decorators/roles.decorator';
@@ -11,7 +12,10 @@ import { CurrentUser } from '../../common/decorators/current-user.decorator';
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('documents')
 export class DocumentsController {
-  constructor(private service: DocumentsService) {}
+  constructor(
+    private service: DocumentsService,
+    private sunatService: SunatService,
+  ) {}
 
   @Get('stats')
   getStats(@CurrentUser() user: any) {
@@ -45,5 +49,15 @@ export class DocumentsController {
     @CurrentUser() user: any,
   ) {
     return this.service.updateStatus(id, body.estado, user.businessId);
+  }
+
+  /** POST /api/v1/documents/:id/send-sunat — Enviar comprobante a SUNAT via Nubefact */
+  @Roles('administrador', 'supervisor', 'cajero')
+  @Post(':id/send-sunat')
+  sendToSunat(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: any,
+  ) {
+    return this.sunatService.sendDocument(id, user.businessId);
   }
 }

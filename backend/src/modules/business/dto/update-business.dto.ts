@@ -18,4 +18,10 @@ export class UpdateBusinessDto {
 
   @IsString() @IsOptional()
   logoUrl?: string;
+
+  @IsString() @MaxLength(200) @IsOptional()
+  nubefactToken?: string;
+
+  @IsString() @MaxLength(20) @IsOptional()
+  sunatMode?: string;
 }
