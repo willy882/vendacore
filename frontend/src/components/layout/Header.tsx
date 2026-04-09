@@ -1,7 +1,7 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import { useQuery, useMutation } from '@tanstack/react-query';
 import { useForm } from 'react-hook-form';
-import { Bell, Menu, RefreshCw, AlertTriangle, Package, X, LogOut, User, KeyRound, Check } from 'lucide-react';
+import { Bell, Menu, RefreshCw, AlertTriangle, Package, X, LogOut, User, KeyRound, Check, Camera } from 'lucide-react';
 import { useAuthStore } from '@/stores/auth.store';
 import { cn } from '@/lib/utils';
 import api from '@/lib/api';
@@ -109,12 +109,37 @@ function NotifPanel({ onClose }: { onClose: () => void }) {
 // Panel de perfil
 // ─────────────────────────────────────────────────────────────────────────────
 
+/** Comprime una imagen a máx. 120×120px y la retorna como data URL JPEG */
+function compressImage(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => {
+      const size = 120;
+      const canvas = document.createElement('canvas');
+      canvas.width = size; canvas.height = size;
+      const ctx = canvas.getContext('2d')!;
+      // Recorte centrado
+      const min = Math.min(img.width, img.height);
+      const sx = (img.width - min) / 2;
+      const sy = (img.height - min) / 2;
+      ctx.drawImage(img, sx, sy, min, min, 0, 0, size, size);
+      URL.revokeObjectURL(url);
+      resolve(canvas.toDataURL('image/jpeg', 0.85));
+    };
+    img.onerror = reject;
+    img.src = url;
+  });
+}
+
 function ProfilePanel({ onClose }: { onClose: () => void }) {
   const user   = useAuthStore((s) => s.user);
   const logout = useAuthStore((s) => s.logout);
   const setAuth = useAuthStore((s) => s.setAuth);
   const [editing, setEditing] = useState(false);
   const [saved, setSaved]     = useState(false);
+  const [avatarUploading, setAvatarUploading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const { register, handleSubmit, reset, formState: { isSubmitting } } =
     useForm<ProfileForm>({
@@ -127,10 +152,9 @@ function ProfilePanel({ onClose }: { onClose: () => void }) {
     });
 
   const updateMut = useMutation({
-    mutationFn: (data: Partial<ProfileForm>) =>
+    mutationFn: (data: Partial<ProfileForm> & { avatarUrl?: string }) =>
       api.patch('/users/me', data).then(r => r.data),
     onSuccess: (updated) => {
-      // Actualizar el store con los nuevos datos
       setAuth({ ...user!, ...updated }, useAuthStore.getState().accessToken!, useAuthStore.getState().refreshToken!);
       setSaved(true);
       setEditing(false);
@@ -148,15 +172,47 @@ function ProfilePanel({ onClose }: { onClose: () => void }) {
     updateMut.mutate(payload);
   };
 
+  const handleAvatarChange = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setAvatarUploading(true);
+    try {
+      const compressed = await compressImage(file);
+      const updated = await api.patch('/users/me', { avatarUrl: compressed }).then(r => r.data);
+      setAuth({ ...user!, ...updated }, useAuthStore.getState().accessToken!, useAuthStore.getState().refreshToken!);
+    } finally {
+      setAvatarUploading(false);
+      e.target.value = '';
+    }
+  }, [user, setAuth]);
+
   const initials = user ? `${user.nombre[0]}${user.apellido[0]}` : '?';
+  const avatar = (user as any)?.avatarUrl;
 
   return (
     <div className="absolute right-0 top-full mt-2 w-80 bg-white rounded-xl shadow-xl border border-slate-200 z-50 overflow-hidden">
       {/* Cabecera */}
       <div className="px-5 py-4 bg-gradient-to-r from-slate-800 to-slate-700">
         <div className="flex items-center gap-3">
-          <div className="w-12 h-12 rounded-full bg-blue-600 flex items-center justify-center text-white text-base font-bold flex-shrink-0">
-            {initials}
+          {/* Avatar con botón de cámara */}
+          <div className="relative flex-shrink-0 group">
+            <div
+              className="w-12 h-12 rounded-full bg-blue-600 flex items-center justify-center text-white text-base font-bold overflow-hidden cursor-pointer"
+              onClick={() => fileInputRef.current?.click()}
+            >
+              {avatar
+                ? <img src={avatar} alt="avatar" className="w-full h-full object-cover" />
+                : avatarUploading ? <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> : initials
+              }
+            </div>
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              className="absolute -bottom-1 -right-1 w-5 h-5 bg-blue-500 hover:bg-blue-400 rounded-full flex items-center justify-center transition-colors"
+              title="Cambiar foto"
+            >
+              <Camera size={10} className="text-white" />
+            </button>
+            <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={handleAvatarChange} />
           </div>
           <div className="min-w-0">
             <p className="text-white font-semibold truncate">{user?.nombre} {user?.apellido}</p>
@@ -300,6 +356,7 @@ export function Header({ title, onMenuClick, onRefresh, isRefreshing }: Props) {
   });
 
   const initials = user ? `${user.nombre[0]}${user.apellido[0]}` : '?';
+  const avatar = (user as any)?.avatarUrl;
 
   return (
     <header className="h-14 border-b border-slate-200 bg-white flex items-center px-4 gap-3 flex-shrink-0">
@@ -347,10 +404,10 @@ export function Header({ title, onMenuClick, onRefresh, isRefreshing }: Props) {
         <div ref={profileRef} className="relative">
           <button
             onClick={() => { setProfileOpen((v) => !v); setNotifOpen(false); }}
-            className="w-8 h-8 rounded-full bg-blue-700 flex items-center justify-center text-white text-xs font-semibold hover:bg-blue-800 transition-colors"
+            className="w-8 h-8 rounded-full bg-blue-700 flex items-center justify-center text-white text-xs font-semibold hover:bg-blue-800 transition-colors overflow-hidden"
             title="Perfil"
           >
-            {initials}
+            {avatar ? <img src={avatar} alt="avatar" className="w-full h-full object-cover" /> : initials}
           </button>
           {profileOpen && <ProfilePanel onClose={() => setProfileOpen(false)} />}
         </div>

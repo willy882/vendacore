@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -14,28 +14,57 @@ import { Spinner } from '@/components/ui/Spinner';
 import { formatCurrency, formatDate } from '@/lib/utils';
 import type { Supplier } from '@/types';
 import { useAuthStore } from '@/stores/auth.store';
+import { useFormPersist } from '@/hooks/useFormPersist';
 
 const schema = z.object({
-  razonSocial: z.string().min(2, 'Requerido'),
-  ruc:         z.string().length(11, 'RUC debe tener 11 dígitos'),
-  contacto:    z.string().optional(),
-  telefono:    z.string().optional(),
-  email:       z.string().email('Email inválido').optional().or(z.literal('')),
-  direccion:   z.string().optional(),
+  razonSocial:     z.string().min(2, 'Mínimo 2 caracteres'),
+  ruc:             z.string().regex(/^\d{11}$/, 'RUC debe tener exactamente 11 dígitos').optional().or(z.literal('')),
+  nombreContacto:  z.string().max(100)
+    .refine(v => !v || !/^\d+$/.test(v) || v.length === 9, 'Si es número debe tener exactamente 9 dígitos')
+    .optional().or(z.literal('')),
+  telefono:        z.string().regex(/^\d{9}$/, 'El teléfono debe tener exactamente 9 dígitos').optional().or(z.literal('')),
+  email:           z.string().email('Email inválido').optional().or(z.literal('')),
+  direccion:       z.string().optional().or(z.literal('')),
 });
 type FormData = z.infer<typeof schema>;
 
 function SupplierModal({ open, onClose, supplier }: { open: boolean; onClose: () => void; supplier?: Supplier | null }) {
   const qc = useQueryClient();
   const isEdit = !!supplier;
-  const { register, handleSubmit, reset, formState: { errors } } = useForm<FormData>({
+  const { register, handleSubmit, reset, watch, formState: { errors, isSubmitting } } = useForm<FormData>({
     resolver: zodResolver(schema),
-    defaultValues: supplier ?? {},
   });
+  const { clearPersisted } = useFormPersist('proveedores', watch, reset, open, isEdit);
+
+  useEffect(() => {
+    if (open) {
+      reset(supplier ? {
+        razonSocial:    supplier.razonSocial,
+        ruc:            supplier.ruc ?? '',
+        nombreContacto: supplier.nombreContacto ?? '',
+        telefono:       supplier.telefono ?? '',
+        email:          supplier.email ?? '',
+        direccion:      supplier.direccion ?? '',
+      } : {
+        razonSocial: '', ruc: '', nombreContacto: '',
+        telefono: '', email: '', direccion: '',
+      });
+    }
+  }, [open, supplier]);
 
   const saveMut = useMutation({
-    mutationFn: (d: FormData) => isEdit ? suppliersService.update(supplier!.id, d) : suppliersService.create(d),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['suppliers'] }); reset(); onClose(); },
+    mutationFn: (d: FormData) => {
+      const payload = {
+        razonSocial:    d.razonSocial,
+        ruc:            d.ruc            || undefined,
+        nombreContacto: d.nombreContacto || undefined,
+        telefono:       d.telefono       || undefined,
+        email:          d.email          || undefined,
+        direccion:      d.direccion      || undefined,
+      };
+      return isEdit ? suppliersService.update(supplier!.id, payload) : suppliersService.create(payload);
+    },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['suppliers'] }); clearPersisted(); reset(); onClose(); },
   });
 
   const err = (saveMut.error as any)?.response?.data?.message;
@@ -44,19 +73,50 @@ function SupplierModal({ open, onClose, supplier }: { open: boolean; onClose: ()
     <Modal open={open} onClose={() => { reset(); onClose(); }} title={isEdit ? 'Editar Proveedor' : 'Nuevo Proveedor'} size="md"
       footer={<>
         <Button variant="outline" onClick={() => { reset(); onClose(); }}>Cancelar</Button>
-        <Button loading={saveMut.isPending} onClick={handleSubmit((d) => saveMut.mutate(d))}>{isEdit ? 'Guardar' : 'Crear'}</Button>
+        <Button loading={saveMut.isPending || isSubmitting} onClick={handleSubmit((d) => saveMut.mutate(d))}>
+          {isEdit ? 'Guardar' : 'Crear'}
+        </Button>
       </>}
     >
       <div className="space-y-4">
         {err && <div className="rounded-lg bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700">{Array.isArray(err) ? err.join(', ') : err}</div>}
         <Input label="Razón Social *" {...register('razonSocial')} error={errors.razonSocial?.message} />
-        <Input label="RUC *" placeholder="20000000001" maxLength={11} {...register('ruc')} error={errors.ruc?.message} />
+        <Input label="RUC" placeholder="20000000001" maxLength={11} {...register('ruc')} error={errors.ruc?.message} />
         <div className="grid grid-cols-2 gap-4">
-          <Input label="Contacto" {...register('contacto')} />
-          <Input label="Teléfono" {...register('telefono')} />
+          <Input label="Contacto" {...register('nombreContacto')} error={errors.nombreContacto?.message} />
+          <Input label="Teléfono" placeholder="987654321" maxLength={15} {...register('telefono')} error={errors.telefono?.message} />
         </div>
         <Input label="Email" type="email" {...register('email')} error={errors.email?.message} />
         <Input label="Dirección" {...register('direccion')} />
+      </div>
+    </Modal>
+  );
+}
+
+function DeleteSupplierModal({ supplier, onClose }: { supplier: Supplier; onClose: () => void }) {
+  const qc = useQueryClient();
+  const deleteMut = useMutation({
+    mutationFn: () => suppliersService.delete(supplier.id),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['suppliers'] }); onClose(); },
+  });
+  return (
+    <Modal open onClose={onClose} title="Eliminar Proveedor">
+      <div className="space-y-4">
+        <p className="text-sm text-slate-700">
+          ¿Eliminar a <strong>{supplier.razonSocial}</strong>? Esta acción no se puede deshacer.
+        </p>
+        {deleteMut.error && (
+          <p className="text-sm text-red-600 bg-red-50 border border-red-200 rounded px-3 py-2">
+            {(deleteMut.error as any)?.response?.data?.message ?? 'Error al eliminar'}
+          </p>
+        )}
+        <div className="flex justify-end gap-2">
+          <Button variant="ghost" onClick={onClose} disabled={deleteMut.isPending}>Cancelar</Button>
+          <Button variant="danger" onClick={() => deleteMut.mutate()} disabled={deleteMut.isPending}>
+            {deleteMut.isPending ? <Spinner size="sm" /> : <Trash2 size={15} />}
+            {deleteMut.isPending ? 'Eliminando...' : 'Eliminar'}
+          </Button>
+        </div>
       </div>
     </Modal>
   );
@@ -99,12 +159,12 @@ function HistorialModal({ open, onClose, supplier }: { open: boolean; onClose: (
 }
 
 export default function ProveedoresPage() {
-  const qc = useQueryClient();
   const canEdit = useAuthStore((s) => s.hasRoles(['administrador', 'supervisor']));
-  const [search, setSearch]   = useState('');
-  const [modal, setModal]     = useState(false);
-  const [editing, setEditing] = useState<Supplier | null>(null);
+  const [search, setSearch]       = useState('');
+  const [modal, setModal]         = useState(false);
+  const [editing, setEditing]     = useState<Supplier | null>(null);
   const [historial, setHistorial] = useState<Supplier | null>(null);
+  const [toDelete, setToDelete]   = useState<Supplier | null>(null);
 
   const { data, isLoading } = useQuery({
     queryKey: ['suppliers', search],
@@ -112,12 +172,8 @@ export default function ProveedoresPage() {
     placeholderData: (p) => p,
   });
 
-  const deleteMut = useMutation({
-    mutationFn: suppliersService.delete,
-    onSuccess:  () => qc.invalidateQueries({ queryKey: ['suppliers'] }),
-  });
-
-  const suppliers = data?.data ?? [];
+  // Backend devuelve array directo o paginado
+  const suppliers = Array.isArray(data) ? data : (data?.data ?? []);
 
   return (
     <div className="space-y-4">
@@ -131,7 +187,7 @@ export default function ProveedoresPage() {
       <Card padding="none">
         <div className="flex items-center gap-2 px-5 py-3 border-b">
           <Truck size={15} className="text-slate-400" />
-          <span className="text-sm text-slate-600"><strong>{data?.total ?? 0}</strong> proveedores</span>
+          <span className="text-sm text-slate-600"><strong>{suppliers.length}</strong> proveedores</span>
         </div>
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
@@ -146,8 +202,8 @@ export default function ProveedoresPage() {
               ) : suppliers.map((s) => (
                 <tr key={s.id} className="border-b hover:bg-slate-50">
                   <td className="px-4 py-3 font-medium text-slate-800">{s.razonSocial}</td>
-                  <td className="px-4 py-3 font-mono text-slate-600">{s.ruc}</td>
-                  <td className="px-4 py-3 text-slate-500">{s.contacto ?? '—'}</td>
+                  <td className="px-4 py-3 font-mono text-slate-600">{s.ruc ?? '—'}</td>
+                  <td className="px-4 py-3 text-slate-500">{s.nombreContacto ?? '—'}</td>
                   <td className="px-4 py-3 text-slate-500">{s.telefono ?? '—'}</td>
                   <td className="px-4 py-3 text-slate-500">{s.email ?? '—'}</td>
                   <td className="px-4 py-3">
@@ -157,10 +213,10 @@ export default function ProveedoresPage() {
                   </td>
                   <td className="px-4 py-3">
                     <div className="flex items-center gap-1">
-                      <button onClick={() => setHistorial(s)} className="p-1.5 rounded hover:bg-blue-50 text-slate-400 hover:text-blue-600"><History size={15} /></button>
+                      <button onClick={() => setHistorial(s)} className="p-1.5 rounded hover:bg-blue-50 text-slate-400 hover:text-blue-600" title="Historial"><History size={15} /></button>
                       {canEdit && <>
-                        <button onClick={() => { setEditing(s); setModal(true); }} className="p-1.5 rounded hover:bg-amber-50 text-slate-400 hover:text-amber-600"><Pencil size={15} /></button>
-                        <button onClick={() => confirm('¿Eliminar proveedor?') && deleteMut.mutate(s.id)} className="p-1.5 rounded hover:bg-red-50 text-slate-400 hover:text-red-500"><Trash2 size={15} /></button>
+                        <button onClick={() => { setEditing(s); setModal(true); }} className="p-1.5 rounded hover:bg-amber-50 text-slate-400 hover:text-amber-600" title="Editar"><Pencil size={15} /></button>
+                        <button onClick={() => setToDelete(s)} className="p-1.5 rounded hover:bg-red-50 text-slate-400 hover:text-red-500" title="Eliminar"><Trash2 size={15} /></button>
                       </>}
                     </div>
                   </td>
@@ -174,6 +230,7 @@ export default function ProveedoresPage() {
 
       <SupplierModal open={modal} onClose={() => { setModal(false); setEditing(null); }} supplier={editing} />
       <HistorialModal open={!!historial} onClose={() => setHistorial(null)} supplier={historial} />
+      {toDelete && <DeleteSupplierModal supplier={toDelete} onClose={() => setToDelete(null)} />}
     </div>
   );
 }

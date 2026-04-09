@@ -116,22 +116,24 @@ function KardexModal({ open, onClose, product }: { open: boolean; onClose: () =>
               ))}
             </tr></thead>
             <tbody>
-              {data?.map((m: any) => {
+              {Array.isArray(data?.data) && data!.data.map((m: any) => {
                 const mt = movTypes[m.tipo] ?? { label: m.tipo, color: 'default' };
                 const isIn = ['entrada_compra', 'ajuste_entrada', 'devolucion'].includes(m.tipo);
                 return (
                   <tr key={m.id} className="border-b hover:bg-slate-50">
-                    <td className="px-3 py-2 text-slate-500 text-xs">{formatDateTime(m.createdAt)}</td>
+                    <td className="px-3 py-2 text-slate-500 text-xs">{formatDateTime(m.fecha ?? m.createdAt)}</td>
                     <td className="px-3 py-2"><Badge variant={mt.color as any}>{mt.label}</Badge></td>
                     <td className="px-3 py-2 text-emerald-600 font-medium">{isIn ? formatNumber(Number(m.cantidad)) : '—'}</td>
                     <td className="px-3 py-2 text-red-600 font-medium">{!isIn ? formatNumber(Number(m.cantidad)) : '—'}</td>
-                    <td className="px-3 py-2 font-bold text-slate-800">{formatNumber(Number(m.stockDespues))}</td>
+                    <td className="px-3 py-2 font-bold text-slate-800">{formatNumber(Number(m.stockNuevo ?? m.stockDespues ?? 0))}</td>
                     <td className="px-3 py-2 text-slate-600">{m.costoUnitario ? formatCurrency(Number(m.costoUnitario)) : '—'}</td>
                     <td className="px-3 py-2 text-slate-500 text-xs">{m.user ? `${m.user.nombre} ${m.user.apellido}` : '—'}</td>
                   </tr>
                 );
               })}
-              {!data?.length && <tr><td colSpan={7} className="text-center py-8 text-slate-400">Sin movimientos en el período</td></tr>}
+              {!Array.isArray(data?.data) || data!.data.length === 0
+                ? <tr><td colSpan={7} className="text-center py-8 text-slate-400">Sin movimientos en el período</td></tr>
+                : null}
             </tbody>
           </table>
         </div>

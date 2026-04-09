@@ -10,7 +10,7 @@ export interface CreateCustomerData {
   telefono?:       string;
   email?:          string;
   direccion?:      string;
-  limiteCredito?:  number;
+  creditoLimite?:  number;
 }
 
 export const customersService = {
@@ -36,5 +36,5 @@ export const customersService = {
     api.put<Customer>(`/customers/${id}`, data).then((r) => r.data),
 
   delete: (id: string) =>
-    api.delete(`/customers/${id}`),
+    api.patch(`/customers/${id}/deactivate`),
 };

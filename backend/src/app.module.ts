@@ -20,6 +20,7 @@ import { PurchasesModule } from './modules/purchases/purchases.module';
 import { DashboardModule } from './modules/dashboard/dashboard.module';
 import { ReportsModule } from './modules/reports/reports.module';
 import { AuditModule } from './modules/audit/audit.module';
+import { BusinessModule } from './modules/business/business.module';
 
 // Guards globales
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
@@ -60,6 +61,7 @@ import { AuditInterceptor } from './common/interceptors/audit.interceptor';
     DashboardModule,
     ReportsModule,
     AuditModule,
+    BusinessModule,
   ],
   providers: [
     // Filtro global de excepciones

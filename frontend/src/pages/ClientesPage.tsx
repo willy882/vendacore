@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -15,6 +15,7 @@ import { Spinner } from '@/components/ui/Spinner';
 import { formatCurrency, formatDate } from '@/lib/utils';
 import type { Customer } from '@/types';
 import { useAuthStore } from '@/stores/auth.store';
+import { useFormPersist } from '@/hooks/useFormPersist';
 
 const schema = z.object({
   nombreCompleto:  z.string().min(2, 'Requerido'),
@@ -30,25 +31,37 @@ type FormData = z.infer<typeof schema>;
 function CustomerModal({ open, onClose, customer }: { open: boolean; onClose: () => void; customer?: Customer | null }) {
   const qc = useQueryClient();
   const isEdit = !!customer;
-  const { register, handleSubmit, reset, formState: { errors, isSubmitting } } = useForm<FormData>({
+  const { register, handleSubmit, reset, watch, formState: { errors, isSubmitting } } = useForm<FormData>({
     resolver: zodResolver(schema),
-    defaultValues: customer ? {
-      nombreCompleto:  customer.nombreCompleto,
-      tipoDocumento:   customer.tipoDocumento as any,
-      numeroDocumento: customer.numeroDocumento,
-      telefono:        customer.telefono ?? '',
-      email:           customer.email ?? '',
-      direccion:       customer.direccion ?? '',
-      limiteCredito:   String(customer.limiteCredito ?? 0),
-    } : { tipoDocumento: 'DNI' as const },
+    defaultValues: { tipoDocumento: 'DNI' as const },
   });
+  const { clearPersisted } = useFormPersist('clientes', watch, reset, open, isEdit);
+
+  // Cada vez que se abre el modal, poblar (o limpiar) el formulario
+  useEffect(() => {
+    if (open) {
+      reset(customer ? {
+        nombreCompleto:  customer.nombreCompleto,
+        tipoDocumento:   customer.tipoDocumento as any,
+        numeroDocumento: customer.numeroDocumento,
+        telefono:        customer.telefono ?? '',
+        email:           customer.email ?? '',
+        direccion:       customer.direccion ?? '',
+        limiteCredito:   String(customer.creditoLimite ?? 0),
+      } : {
+        nombreCompleto: '', tipoDocumento: 'DNI', numeroDocumento: '',
+        telefono: '', email: '', direccion: '', limiteCredito: '',
+      });
+    }
+  }, [open, customer]);
 
   const saveMut = useMutation({
     mutationFn: (data: FormData) => {
-      const payload = { ...data, limiteCredito: data.limiteCredito ? parseFloat(data.limiteCredito) : undefined };
+      const { limiteCredito, ...rest } = data;
+      const payload = { ...rest, creditoLimite: limiteCredito ? parseFloat(limiteCredito) : undefined };
       return isEdit ? customersService.update(customer!.id, payload) : customersService.create(payload);
     },
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['customers'] }); reset(); onClose(); },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['customers'] }); clearPersisted(); reset(); onClose(); },
   });
 
   const err = (saveMut.error as any)?.response?.data?.message;
@@ -121,16 +134,45 @@ function HistorialModal({ open, onClose, customer }: { open: boolean; onClose: (
   );
 }
 
+function DeleteModal({ customer, onClose }: { customer: Customer; onClose: () => void }) {
+  const qc = useQueryClient();
+  const deleteMut = useMutation({
+    mutationFn: () => customersService.delete(customer.id),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['customers'] }); onClose(); },
+  });
+  return (
+    <Modal open onClose={onClose} title="Eliminar Cliente">
+      <div className="space-y-4">
+        <p className="text-sm text-slate-700">
+          ¿Eliminar a <strong>{customer.nombreCompleto}</strong>? Esta acción no se puede deshacer.
+        </p>
+        {deleteMut.error && (
+          <p className="text-sm text-red-600 bg-red-50 border border-red-200 rounded px-3 py-2">
+            {(deleteMut.error as any)?.response?.data?.message ?? 'Error al eliminar'}
+          </p>
+        )}
+        <div className="flex justify-end gap-2">
+          <Button variant="ghost" onClick={onClose} disabled={deleteMut.isPending}>Cancelar</Button>
+          <Button variant="danger" onClick={() => deleteMut.mutate()} disabled={deleteMut.isPending}>
+            {deleteMut.isPending ? <Spinner size="sm" /> : <Trash2 size={15} />}
+            {deleteMut.isPending ? 'Eliminando...' : 'Eliminar'}
+          </Button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 const LIMIT = 20;
 
 export default function ClientesPage() {
-  const qc = useQueryClient();
   const canEdit = useAuthStore((s) => s.hasRoles(['administrador', 'supervisor']));
   const [search, setSearch]     = useState('');
   const [page, setPage]         = useState(1);
   const [modal, setModal]       = useState(false);
   const [editing, setEditing]   = useState<Customer | null>(null);
   const [historial, setHistorial] = useState<Customer | null>(null);
+  const [toDelete, setToDelete] = useState<Customer | null>(null);
 
   const { data, isLoading } = useQuery({
     queryKey: ['customers', { search, page }],
@@ -138,13 +180,9 @@ export default function ClientesPage() {
     placeholderData: (p) => p,
   });
 
-  const deleteMut = useMutation({
-    mutationFn: customersService.delete,
-    onSuccess:  () => qc.invalidateQueries({ queryKey: ['customers'] }),
-  });
-
-  const customers  = data?.data ?? [];
-  const totalPages = data?.totalPages ?? 1;
+  // El backend devuelve array directo (sin paginar)
+  const customers  = Array.isArray(data) ? data : (data?.data ?? []);
+  const totalPages = Array.isArray(data) ? 1 : (data?.totalPages ?? 1);
 
   return (
     <div className="space-y-4">
@@ -158,7 +196,7 @@ export default function ClientesPage() {
       <Card padding="none">
         <div className="flex items-center gap-2 px-5 py-3 border-b border-slate-100">
           <Users size={15} className="text-slate-400" />
-          <span className="text-sm text-slate-600"><strong>{data?.total ?? 0}</strong> clientes</span>
+          <span className="text-sm text-slate-600"><strong>{customers.length}</strong> clientes</span>
         </div>
 
         <div className="overflow-x-auto">
@@ -186,7 +224,7 @@ export default function ClientesPage() {
                     <td className="px-4 py-3 text-right">
                       {deuda > 0 ? <span className="text-red-600 font-semibold">{formatCurrency(deuda)}</span> : <span className="text-slate-400">—</span>}
                     </td>
-                    <td className="px-4 py-3 text-right text-slate-600">{c.limiteCredito > 0 ? formatCurrency(Number(c.limiteCredito)) : '—'}</td>
+                    <td className="px-4 py-3 text-right text-slate-600">{c.creditoLimite > 0 ? formatCurrency(Number(c.creditoLimite)) : '—'}</td>
                     <td className="px-4 py-3">
                       <div className="flex items-center justify-center gap-1">
                         <button onClick={() => setHistorial(c)} className="p-1.5 rounded-lg hover:bg-blue-50 text-slate-400 hover:text-blue-600" title="Historial">
@@ -196,7 +234,7 @@ export default function ClientesPage() {
                           <button onClick={() => { setEditing(c); setModal(true); }} className="p-1.5 rounded-lg hover:bg-amber-50 text-slate-400 hover:text-amber-600" title="Editar">
                             <Pencil size={15} />
                           </button>
-                          <button onClick={() => confirm('¿Eliminar cliente?') && deleteMut.mutate(c.id)} className="p-1.5 rounded-lg hover:bg-red-50 text-slate-400 hover:text-red-500" title="Eliminar">
+                          <button onClick={() => setToDelete(c)} className="p-1.5 rounded-lg hover:bg-red-50 text-slate-400 hover:text-red-500" title="Eliminar">
                             <Trash2 size={15} />
                           </button>
                         </>}
@@ -222,6 +260,7 @@ export default function ClientesPage() {
 
       <CustomerModal open={modal} onClose={() => { setModal(false); setEditing(null); }} customer={editing} />
       <HistorialModal open={!!historial} onClose={() => setHistorial(null)} customer={historial} />
+      {toDelete && <DeleteModal customer={toDelete} onClose={() => setToDelete(null)} />}
     </div>
   );
 }

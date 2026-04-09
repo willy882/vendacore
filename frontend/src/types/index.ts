@@ -95,6 +95,7 @@ export interface Product {
   isActive:       boolean;
   category?:      { id: string; nombre: string } | null;
   unidadMedida?:  string;
+  imagenUrl?:     string | null;
 }
 
 export interface ProductCategory {
@@ -114,19 +115,20 @@ export interface Customer {
   email?:          string;
   direccion?:      string;
   creditoUsado:    number;
-  limiteCredito:   number;
+  creditoLimite:   number;
 }
 
 // ─── Suppliers ───────────────────────────────────────────────────────────────
 
 export interface Supplier {
   id: string;
-  razonSocial:     string;
-  ruc:             string;
-  contacto?:       string;
-  telefono?:       string;
-  email?:          string;
-  deudaPendiente:  number;
+  razonSocial:      string;
+  ruc:              string;
+  nombreContacto?:  string;
+  telefono?:        string;
+  email?:           string;
+  direccion?:       string;
+  deudaPendiente:   number;
 }
 
 // ─── Sales ───────────────────────────────────────────────────────────────────
@@ -165,12 +167,15 @@ export interface Purchase {
   fecha:           string;
   supplierId:      string;
   supplier:        { razonSocial: string };
+  user?:           { nombre: string; apellido: string } | null;
   tipoDocumento?:  string;
   numeroDocumento?: string;
   subtotal:        number;
   igv:             number;
   total:           number;
   estadoPago:      'pendiente' | 'parcial' | 'pagado';
+  observaciones?:  string | null;
+  items?:          { product: { nombre: string }; cantidad: number; costoUnitario: number; total: number }[];
 }
 
 // ─── Expenses ────────────────────────────────────────────────────────────────

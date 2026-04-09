@@ -28,4 +28,7 @@ export const purchasesService = {
 
   markPaid: (id: string) =>
     api.patch<Purchase>(`/purchases/${id}/mark-paid`).then((r) => r.data),
+
+  delete: (id: string) =>
+    api.delete(`/purchases/${id}`),
 };

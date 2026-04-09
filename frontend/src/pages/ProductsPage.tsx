@@ -6,7 +6,7 @@ import { z } from 'zod';
 import {
   Plus, Search, Pencil, ToggleLeft, ToggleRight,
   AlertTriangle, Package, ChevronLeft, ChevronRight,
-  Tag, Trash2, RefreshCw, Barcode, Download, Printer, Check, X, QrCode,
+  Tag, Trash2, RefreshCw, Barcode, Download, Printer, Check, X, QrCode, Camera,
 } from 'lucide-react';
 import JsBarcode from 'jsbarcode';
 import QRCode from 'qrcode';
@@ -23,6 +23,7 @@ import { Spinner } from '@/components/ui/Spinner';
 import { formatCurrency, formatNumber } from '@/lib/utils';
 import type { Product, ProductCategory } from '@/types';
 import { useAuthStore } from '@/stores/auth.store';
+import { useFormPersist } from '@/hooks/useFormPersist';
 
 // ── Esquema del formulario ────────────────────────────────────────────────────
 
@@ -56,6 +57,71 @@ function generateEAN13(): string {
   const sum    = digits.reduce((acc, d, i) => acc + d * (i % 2 === 0 ? 1 : 3), 0);
   const check  = (10 - (sum % 10)) % 10;
   return raw + check;
+}
+
+// ── Compresor de imagen de producto ──────────────────────────────────────────
+
+function compressProductImage(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    // Si pesa menos de 3 MB, leer directamente sin tocar la imagen
+    if (file.size <= 3 * 1024 * 1024) {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result as string);
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+      return;
+    }
+    // Solo redimensionar si es muy grande (>3 MB)
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      const MAX = 1800;
+      const scale = Math.min(MAX / img.width, MAX / img.height, 1);
+      const w = Math.round(img.width * scale);
+      const h = Math.round(img.height * scale);
+      const canvas = document.createElement('canvas');
+      canvas.width = w; canvas.height = h;
+      const ctx = canvas.getContext('2d')!;
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = 'high';
+      ctx.drawImage(img, 0, 0, w, h);
+      const dataUrl = file.type === 'image/png'
+        ? canvas.toDataURL('image/png')
+        : canvas.toDataURL('image/jpeg', 0.95);
+      resolve(dataUrl);
+    };
+    img.onerror = reject;
+    img.src = url;
+  });
+}
+
+// ── Visor de imagen ───────────────────────────────────────────────────────────
+
+function ImageViewer({ src, alt, onClose }: { src: string; alt: string; onClose: () => void }) {
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [onClose]);
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm"
+      onClick={onClose}
+    >
+      <div className="relative max-w-lg w-full" onClick={(e) => e.stopPropagation()}>
+        <button
+          onClick={onClose}
+          className="absolute -top-3 -right-3 w-8 h-8 rounded-full bg-white shadow flex items-center justify-center text-slate-600 hover:text-slate-900 z-10"
+        >
+          <X size={16} />
+        </button>
+        <img src={src} alt={alt} className="w-full rounded-2xl shadow-2xl object-contain max-h-[80vh]" />
+        <p className="text-center text-white/80 text-sm mt-3">{alt}</p>
+      </div>
+    </div>
+  );
 }
 
 // ── Modal de código de barras / QR ───────────────────────────────────────────
@@ -255,8 +321,16 @@ interface ProductModalProps {
 function ProductModal({ open, onClose, product, categories }: ProductModalProps) {
   const qc = useQueryClient();
   const isEdit = !!product;
+  const imgInputRef = useRef<HTMLInputElement>(null);
+  const [imagenUrl, setImagenUrl] = useState<string | null>(null);
+  const [imgLoading, setImgLoading] = useState(false);
 
-  const { register, handleSubmit, reset, setValue, formState: { errors, isSubmitting } } =
+  // Sincronizar imagen al abrir/cambiar producto
+  useEffect(() => {
+    setImagenUrl(product?.imagenUrl ?? null);
+  }, [open, product]);
+
+  const { register, handleSubmit, reset, watch, setValue, formState: { errors, isSubmitting } } =
     useForm<FormData>({
       resolver: zodResolver(schema),
       values: (product
@@ -276,12 +350,26 @@ function ProductModal({ open, onClose, product, categories }: ProductModalProps)
       ) as FormData,
     });
 
+  const { clearPersisted } = useFormPersist('productos', watch, reset, open, isEdit);
+
   // Auto-generar EAN-13 al abrir el modal de creación
   useEffect(() => {
     if (open && !isEdit) {
       setValue('codigoBarras', generateEAN13());
     }
   }, [open, isEdit, setValue]);
+
+  const handleImageChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setImgLoading(true);
+    try {
+      const dataUrl = await compressProductImage(file);
+      setImagenUrl(dataUrl);
+    } catch { /* ignorar */ }
+    finally { setImgLoading(false); }
+    e.target.value = '';
+  };
 
   const createMut = useMutation({
     mutationFn: productsService.create,
@@ -294,7 +382,7 @@ function ProductModal({ open, onClose, product, categories }: ProductModalProps)
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['products'] }); handleClose(); },
   });
 
-  const handleClose = () => { reset(); onClose(); };
+  const handleClose = () => { clearPersisted(); reset(); setImagenUrl(null); onClose(); };
 
   const onSubmit = (data: FormData) => {
     const clean: Parameters<typeof productsService.create>[0] = {
@@ -309,6 +397,7 @@ function ProductModal({ open, onClose, product, categories }: ProductModalProps)
       descripcion:   data.descripcion   || undefined,
       categoryId:    data.categoryId    || undefined,
       unidadMedida:  data.unidadMedida  || undefined,
+      imagenUrl:     imagenUrl ?? undefined,
     };
     if (isEdit && product) {
       updateMut.mutate({ id: product.id, data: clean });
@@ -348,6 +437,44 @@ function ProductModal({ open, onClose, product, categories }: ProductModalProps)
             {Array.isArray(errMsg) ? errMsg.join(', ') : errMsg}
           </div>
         )}
+
+        {/* Imagen del producto */}
+        <div className="flex items-center gap-4">
+          <div
+            onClick={() => imgInputRef.current?.click()}
+            className="w-20 h-20 rounded-xl border-2 border-dashed border-slate-300 hover:border-blue-400 flex items-center justify-center cursor-pointer overflow-hidden bg-slate-50 transition-colors flex-shrink-0"
+            title="Subir imagen"
+          >
+            {imgLoading ? (
+              <div className="w-5 h-5 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
+            ) : imagenUrl ? (
+              <img src={imagenUrl} alt="producto" className="w-full h-full object-cover" />
+            ) : (
+              <Camera size={22} className="text-slate-400" />
+            )}
+          </div>
+          <div className="text-xs text-slate-400 space-y-1">
+            <p className="font-medium text-slate-600">Imagen del producto</p>
+            <p>Haz clic en el cuadro para subir una imagen.</p>
+            <p>Se comprime a 200×200 px automáticamente.</p>
+            {imagenUrl && (
+              <button
+                type="button"
+                onClick={() => setImagenUrl(null)}
+                className="text-red-500 hover:underline"
+              >
+                Eliminar imagen
+              </button>
+            )}
+          </div>
+          <input
+            ref={imgInputRef}
+            type="file"
+            accept="image/*"
+            className="hidden"
+            onChange={handleImageChange}
+          />
+        </div>
 
         {/* Fila 1 */}
         <Input label="Nombre *" placeholder="Ej: Arroz extra" error={errors.nombre?.message} {...register('nombre')} />
@@ -578,6 +705,7 @@ export default function ProductsPage() {
   const [barcodeModal, setBarcodeModal] = useState(false);
   const [editing, setEditing]         = useState<Product | null>(null);
   const [barcodeProduct, setBarcodeProduct] = useState<Product | null>(null);
+  const [viewerImg, setViewerImg] = useState<{ src: string; alt: string } | null>(null);
 
   // Queries
   const { data: catData } = useQuery({
@@ -718,11 +846,25 @@ export default function ProductsPage() {
                         </span>
                       </td>
                       <td className="px-4 py-3">
-                        <div>
-                          <p className="font-medium text-slate-800">{p.nombre}</p>
-                          {p.descripcion && (
-                            <p className="text-xs text-slate-400 line-clamp-1 mt-0.5">{p.descripcion}</p>
+                        <div className="flex items-center gap-2">
+                          {p.imagenUrl ? (
+                            <img
+                              src={p.imagenUrl}
+                              alt={p.nombre}
+                              onClick={() => setViewerImg({ src: p.imagenUrl!, alt: p.nombre })}
+                              className="w-10 h-10 rounded-lg object-cover flex-shrink-0 border border-slate-200 cursor-zoom-in hover:opacity-80 transition-opacity"
+                            />
+                          ) : (
+                            <div className="w-10 h-10 rounded-lg bg-slate-100 flex items-center justify-center flex-shrink-0">
+                              <Package size={14} className="text-slate-400" />
+                            </div>
                           )}
+                          <div>
+                            <p className="font-medium text-slate-800">{p.nombre}</p>
+                            {p.descripcion && (
+                              <p className="text-xs text-slate-400 line-clamp-1 mt-0.5">{p.descripcion}</p>
+                            )}
+                          </div>
                         </div>
                       </td>
                       <td className="px-4 py-3">
@@ -854,6 +996,14 @@ export default function ProductsPage() {
         onClose={() => { setBarcodeModal(false); setBarcodeProduct(null); }}
         product={barcodeProduct}
       />
+
+      {viewerImg && (
+        <ImageViewer
+          src={viewerImg.src}
+          alt={viewerImg.alt}
+          onClose={() => setViewerImg(null)}
+        />
+      )}
     </div>
   );
 }

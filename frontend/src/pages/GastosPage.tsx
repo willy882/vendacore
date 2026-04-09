@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -16,6 +16,7 @@ import { Spinner } from '@/components/ui/Spinner';
 import { formatCurrency, formatDate, currentMonthRange } from '@/lib/utils';
 import type { Expense, ExpenseCategory } from '@/types';
 import { useAuthStore } from '@/stores/auth.store';
+import { useFormPersist } from '@/hooks/useFormPersist';
 
 const schema = z.object({
   descripcion:  z.string().min(2, 'Requerido'),
@@ -30,23 +31,36 @@ function ExpenseModal({ open, onClose, expense, categories }: { open: boolean; o
   const qc = useQueryClient();
   const isEdit = !!expense;
   const today = new Date().toISOString().split('T')[0];
-  const { register, handleSubmit, reset, formState: { errors } } = useForm<FormData>({
+  const { register, handleSubmit, reset, watch, formState: { errors } } = useForm<FormData>({
     resolver: zodResolver(schema),
-    defaultValues: expense ? {
-      descripcion:  expense.descripcion,
-      monto:        String(expense.monto),
-      fecha:        expense.fecha.split('T')[0],
-      categoryId:   expense.categoryId ?? '',
-      observaciones: expense.observaciones ?? '',
-    } : { fecha: today },
   });
+  const { clearPersisted } = useFormPersist('gastos', watch, reset, open, isEdit);
+
+  useEffect(() => {
+    if (open) {
+      reset(expense ? {
+        descripcion:   expense.descripcion,
+        monto:         String(expense.monto),
+        fecha:         expense.fecha.split('T')[0],
+        categoryId:    expense.categoryId ?? '',
+        observaciones: expense.observaciones ?? '',
+      } : { fecha: today, descripcion: '', monto: '', categoryId: '', observaciones: '' });
+    }
+  }, [open, expense]);
 
   const saveMut = useMutation({
     mutationFn: (d: FormData) => {
       const payload = { ...d, monto: parseFloat(d.monto), categoryId: d.categoryId || undefined };
       return isEdit ? expensesService.update(expense!.id, payload) : expensesService.create(payload);
     },
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['expenses'] }); reset(); onClose(); },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['expenses'] });
+      qc.invalidateQueries({ queryKey: ['expense-summary'] });
+      qc.invalidateQueries({ queryKey: ['dashboard'] });
+      clearPersisted();
+      reset();
+      onClose();
+    },
   });
 
   const catOptions = [{ value: '', label: '— Sin categoría —' }, ...categories.map((c) => ({ value: c.id, label: c.nombre }))];
@@ -102,7 +116,11 @@ export default function GastosPage() {
 
   const deleteMut = useMutation({
     mutationFn: expensesService.delete,
-    onSuccess:  () => qc.invalidateQueries({ queryKey: ['expenses'] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['expenses'] });
+      qc.invalidateQueries({ queryKey: ['expense-summary'] });
+      qc.invalidateQueries({ queryKey: ['dashboard'] });
+    },
   });
 
   const addCatMut = useMutation({

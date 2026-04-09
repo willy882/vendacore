@@ -2,7 +2,7 @@ import { NavLink, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard, ShoppingCart, Package, ArchiveX,
   Users, Truck, ClipboardList, DollarSign, Landmark,
-  BarChart2, ScrollText, Settings, LogOut, ChevronRight,
+  BarChart2, ScrollText, Settings, LogOut, ChevronRight, History,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAuthStore } from '@/stores/auth.store';
@@ -17,7 +17,8 @@ interface NavItem {
 
 const NAV_ITEMS: NavItem[] = [
   { label: 'Dashboard',    to: '/',             icon: <LayoutDashboard size={18} /> },
-  { label: 'Ventas (POS)', to: '/ventas',        icon: <ShoppingCart size={18} /> },
+  { label: 'Ventas (POS)', to: '/ventas',          icon: <ShoppingCart size={18} /> },
+  { label: 'Historial Ventas', to: '/historial-ventas', icon: <History size={18} /> },
   { label: 'Productos',    to: '/productos',     icon: <Package size={18} /> },
   { label: 'Inventario',   to: '/inventario',    icon: <ArchiveX size={18} /> },
   { label: 'Clientes',     to: '/clientes',      icon: <Users size={18} /> },
@@ -94,8 +95,10 @@ export function Sidebar({ onClose }: Props) {
       {/* User footer */}
       <div className="border-t border-slate-700/50 p-3">
         <div className="flex items-center gap-3 px-2 py-2 rounded-lg mb-1">
-          <div className="w-8 h-8 rounded-full bg-blue-700 flex items-center justify-center text-white text-xs font-semibold flex-shrink-0">
-            {user ? `${user.nombre[0]}${user.apellido[0]}` : '??'}
+          <div className="w-8 h-8 rounded-full bg-blue-700 flex items-center justify-center text-white text-xs font-semibold flex-shrink-0 overflow-hidden">
+            {(user as any)?.avatarUrl
+              ? <img src={(user as any).avatarUrl} alt="avatar" className="w-full h-full object-cover" />
+              : user ? `${user.nombre[0]}${user.apellido[0]}` : '??'}
           </div>
           <div className="flex-1 min-w-0">
             <p className="text-sm text-white font-medium truncate">

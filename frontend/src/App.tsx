@@ -19,7 +19,8 @@ const GastosPage     = lazy(() => import('@/pages/GastosPage'));
 const CajaPage       = lazy(() => import('@/pages/CajaPage'));
 const ReportesPage   = lazy(() => import('@/pages/ReportesPage'));
 const AuditoriaPage  = lazy(() => import('@/pages/AuditoriaPage'));
-const UsuariosPage   = lazy(() => import('@/pages/UsuariosPage'));
+const UsuariosPage         = lazy(() => import('@/pages/UsuariosPage'));
+const HistorialVentasPage  = lazy(() => import('@/pages/HistorialVentasPage'));
 
 // ── QueryClient: caché agresivo para menos peticiones ─────────────────────────
 const queryClient = new QueryClient({
@@ -74,7 +75,8 @@ export default function App() {
               <Route path="caja"        element={<ErrorBoundary><CajaPage /></ErrorBoundary>} />
               <Route path="reportes"    element={<ErrorBoundary><ReportesPage /></ErrorBoundary>} />
               <Route path="auditoria"   element={<ErrorBoundary><AuditoriaPage /></ErrorBoundary>} />
-              <Route path="usuarios"    element={<ErrorBoundary><UsuariosPage /></ErrorBoundary>} />
+              <Route path="usuarios"         element={<ErrorBoundary><UsuariosPage /></ErrorBoundary>} />
+              <Route path="historial-ventas" element={<ErrorBoundary><HistorialVentasPage /></ErrorBoundary>} />
             </Route>
 
             <Route path="*" element={<Navigate to="/" replace />} />
@@ -85,3 +87,4 @@ export default function App() {
     </ErrorBoundary>
   );
 }
+

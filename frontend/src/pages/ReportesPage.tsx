@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { Badge } from '@/components/ui/Badge';
 import { currentMonthRange } from '@/lib/utils';
+import api from '@/lib/api';
 
 interface ReportDef {
   key:         string;
@@ -71,31 +72,21 @@ const REPORTS: ReportDef[] = [
   },
 ];
 
-function buildUrl(path: string, from?: string, to?: string): string {
-  const params = new URLSearchParams();
-  if (from) params.set('from', from);
-  if (to)   params.set('to', to);
-  const qs = params.toString();
-  return `/api/v1${path}${qs ? `?${qs}` : ''}`;
-}
-
-function downloadReport(url: string, filename: string) {
-  const token = JSON.parse(localStorage.getItem('vendacore-auth') ?? '{}')?.state?.accessToken ?? '';
-  const a = document.createElement('a');
-
-  fetch(url, { headers: { Authorization: `Bearer ${token}` } })
-    .then((res) => {
-      if (!res.ok) throw new Error('Error al generar reporte');
-      return res.blob();
-    })
-    .then((blob) => {
-      const objUrl = URL.createObjectURL(blob);
-      a.href = objUrl;
-      a.download = filename;
-      a.click();
-      URL.revokeObjectURL(objUrl);
-    })
-    .catch((e) => alert(e.message));
+async function downloadReport(path: string, params: Record<string, string>, filename: string) {
+  try {
+    const res = await api.get(path, { params, responseType: 'blob' });
+    const blob = new Blob([res.data]);
+    const objUrl = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = objUrl;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(objUrl), 100);
+  } catch {
+    alert('Error al generar reporte');
+  }
 }
 
 interface ReportCardProps {
@@ -114,13 +105,14 @@ function ReportCard({ report, from, to }: ReportCardProps) {
     const ext  = type === 'excel' ? 'xlsx' : 'pdf';
     const dateStr = report.hasDateRange ? `_${from}_${to}` : `_${new Date().toISOString().split('T')[0]}`;
     const filename = `${report.key}${dateStr}.${ext}`;
-    const url = buildUrl(path, report.hasDateRange ? from : undefined, report.hasDateRange ? to : undefined);
+    const params: Record<string, string> = {};
+    if (report.hasDateRange) { params.from = from; params.to = to; }
 
     if (type === 'excel') setLoadingExcel(true);
     else setLoadingPdf(true);
 
     try {
-      downloadReport(url, filename);
+      await downloadReport(path, params, filename);
     } finally {
       setTimeout(() => {
         setLoadingExcel(false);

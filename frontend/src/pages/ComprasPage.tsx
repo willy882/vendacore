@@ -5,7 +5,7 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import {
   Plus, ChevronLeft, ChevronRight,
-  ClipboardList, CheckCircle, Trash2, AlertCircle,
+  ClipboardList, CheckCircle, Trash2, AlertCircle, Eye,
 } from 'lucide-react';
 import { purchasesService } from '@/services/purchases.service';
 import { suppliersService } from '@/services/suppliers.service';
@@ -20,6 +20,7 @@ import { Spinner } from '@/components/ui/Spinner';
 import { formatCurrency, formatDate, currentMonthRange } from '@/lib/utils';
 import type { Purchase } from '@/types';
 import { useAuthStore } from '@/stores/auth.store';
+import { useFormPersist } from '@/hooks/useFormPersist';
 
 // ── Schema ────────────────────────────────────────────────────────────────────
 
@@ -56,6 +57,7 @@ function PurchaseModal({ open, onClose }: { open: boolean; onClose: () => void }
         items:      [{ productId: '', cantidad: '', costoUnitario: '' }],
       },
     });
+  const { clearPersisted } = useFormPersist('compras', watch, reset, open);
 
   const { fields, append, remove } = useFieldArray({ control, name: 'items' });
 
@@ -89,6 +91,7 @@ function PurchaseModal({ open, onClose }: { open: boolean; onClose: () => void }
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['purchases'] });
       qc.invalidateQueries({ queryKey: ['products'] });
+      clearPersisted();
       reset();
       onClose();
     },
@@ -100,10 +103,10 @@ function PurchaseModal({ open, onClose }: { open: boolean; onClose: () => void }
     const cost = parseFloat(i.costoUnitario) || 0;
     return a + qty * cost;
   }, 0);
-  const igv   = subtotal * 0.18;
-  const total = subtotal + igv;
+  const total = subtotal;
 
-  const supplierOptions = (suppliers?.data ?? []).map((s) => ({ value: s.id, label: `${s.razonSocial} (${s.ruc})` }));
+  const supplierList = Array.isArray(suppliers) ? suppliers : (suppliers?.data ?? []);
+  const supplierOptions = supplierList.map((s) => ({ value: s.id, label: `${s.razonSocial} (${s.ruc ?? s.razonSocial})` }));
   const productOptions  = (productsData?.data ?? []).map((p) => ({ value: p.id, label: `${p.codigoInterno ?? '?'} — ${p.nombre}` }));
   const errMsg = (saveMut.error as any)?.response?.data?.message;
 
@@ -197,13 +200,7 @@ function PurchaseModal({ open, onClose }: { open: boolean; onClose: () => void }
 
           {/* Totales */}
           <div className="mt-3 p-3 bg-slate-50 rounded-lg space-y-1 text-sm text-right">
-            <div className="flex justify-between text-slate-600">
-              <span>Subtotal:</span><span>{formatCurrency(subtotal)}</span>
-            </div>
-            <div className="flex justify-between text-slate-600">
-              <span>IGV (18%):</span><span>{formatCurrency(igv)}</span>
-            </div>
-            <div className="flex justify-between font-bold text-slate-800 text-base pt-1 border-t">
+            <div className="flex justify-between font-bold text-slate-800 text-base">
               <span>Total:</span><span>{formatCurrency(total)}</span>
             </div>
           </div>
@@ -215,12 +212,125 @@ function PurchaseModal({ open, onClose }: { open: boolean; onClose: () => void }
   );
 }
 
+// ── Modal detalle compra ─────────────────────────────────────────────────────
+
+function DetailModal({ purchase, onClose }: { purchase: Purchase; onClose: () => void }) {
+  return (
+    <Modal open onClose={onClose} title="Detalle de Compra" size="lg">
+      <div className="space-y-4 text-sm">
+        <div className="grid grid-cols-2 gap-4">
+          <div><span className="text-slate-500">Proveedor:</span> <strong>{purchase.supplier.razonSocial}</strong></div>
+          <div><span className="text-slate-500">Fecha:</span> <strong>{formatDate(purchase.fecha)}</strong></div>
+          <div><span className="text-slate-500">Documento:</span> <strong>{purchase.tipoDocumento ? `${purchase.tipoDocumento} ${purchase.numeroDocumento ?? ''}` : '—'}</strong></div>
+          <div><span className="text-slate-500">Estado pago:</span> <strong>{purchase.estadoPago}</strong></div>
+          <div><span className="text-slate-500">Registrado por:</span> <strong>{purchase.user ? `${purchase.user.nombre} ${purchase.user.apellido}` : '—'}</strong></div>
+          {purchase.observaciones && <div className="col-span-2"><span className="text-slate-500">Observaciones:</span> {purchase.observaciones}</div>}
+        </div>
+
+        {purchase.items && purchase.items.length > 0 && (
+          <table className="w-full border-t pt-2">
+            <thead><tr className="border-b">
+              <th className="text-left text-xs text-slate-500 py-2">Producto</th>
+              <th className="text-right text-xs text-slate-500 py-2">Cant.</th>
+              <th className="text-right text-xs text-slate-500 py-2">Costo Unit.</th>
+              <th className="text-right text-xs text-slate-500 py-2">Total</th>
+            </tr></thead>
+            <tbody>
+              {purchase.items.map((item, i) => (
+                <tr key={i} className="border-b hover:bg-slate-50">
+                  <td className="py-2">{item.product.nombre}</td>
+                  <td className="py-2 text-right">{item.cantidad}</td>
+                  <td className="py-2 text-right">{formatCurrency(Number(item.costoUnitario))}</td>
+                  <td className="py-2 text-right font-semibold">{formatCurrency(Number(item.total))}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+
+        <div className="flex justify-between font-bold text-base pt-2 border-t">
+          <span>Total</span>
+          <span>{formatCurrency(Number(purchase.total))}</span>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+// ── Modal eliminar compra ─────────────────────────────────────────────────────
+
+function DeletePurchaseModal({ purchase, onClose }: { purchase: Purchase; onClose: () => void }) {
+  const qc = useQueryClient();
+  const mut = useMutation({
+    mutationFn: () => purchasesService.delete(purchase.id),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['purchases'] });
+      qc.invalidateQueries({ queryKey: ['purchases-pending'] });
+      onClose();
+    },
+  });
+  return (
+    <Modal open onClose={onClose} title="Eliminar Compra">
+      <div className="space-y-4">
+        <p className="text-sm text-slate-700">
+          ¿Eliminar la compra a <strong>{purchase.supplier.razonSocial}</strong> por <strong>{formatCurrency(Number(purchase.total))}</strong>?
+          <br /><span className="text-slate-500">Se revertirá el stock ingresado.</span>
+        </p>
+        {mut.error && (
+          <p className="text-sm text-red-600 bg-red-50 border border-red-200 rounded px-3 py-2">
+            {(mut.error as any)?.response?.data?.message ?? 'Error al eliminar'}
+          </p>
+        )}
+        <div className="flex justify-end gap-2">
+          <Button variant="ghost" onClick={onClose} disabled={mut.isPending}>Cancelar</Button>
+          <Button variant="danger" onClick={() => mut.mutate()} disabled={mut.isPending} loading={mut.isPending}>
+            <Trash2 size={15} /> Eliminar
+          </Button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+// ── Modal confirmar pago ──────────────────────────────────────────────────────
+
+function MarkPaidModal({ purchase, onClose }: { purchase: Purchase; onClose: () => void }) {
+  const qc = useQueryClient();
+  const mut = useMutation({
+    mutationFn: () => purchasesService.markPaid(purchase.id),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['purchases'] });
+      qc.invalidateQueries({ queryKey: ['purchases-pending'] });
+      onClose();
+    },
+  });
+  return (
+    <Modal open onClose={onClose} title="Marcar como Pagado">
+      <div className="space-y-4">
+        <p className="text-sm text-slate-700">
+          ¿Confirmar pago de la compra a <strong>{purchase.supplier.razonSocial}</strong> por <strong>{formatCurrency(Number(purchase.total))}</strong>?
+        </p>
+        {mut.error && (
+          <p className="text-sm text-red-600 bg-red-50 border border-red-200 rounded px-3 py-2">
+            {(mut.error as any)?.response?.data?.message ?? 'Error al actualizar'}
+          </p>
+        )}
+        <div className="flex justify-end gap-2">
+          <Button variant="ghost" onClick={onClose} disabled={mut.isPending}>Cancelar</Button>
+          <Button onClick={() => mut.mutate()} disabled={mut.isPending} loading={mut.isPending}>
+            <CheckCircle size={15} /> Confirmar Pago
+          </Button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 // ── Página ────────────────────────────────────────────────────────────────────
 
 const LIMIT = 20;
 
 export default function ComprasPage() {
-  const qc = useQueryClient();
   const canCreate = useAuthStore((s) => s.hasRoles(['administrador', 'supervisor', 'almacenero', 'contabilidad']));
   const range = currentMonthRange();
 
@@ -228,6 +338,9 @@ export default function ComprasPage() {
   const [to, setTo]           = useState(range.to);
   const [page, setPage]       = useState(1);
   const [modal, setModal]     = useState(false);
+  const [detail, setDetail]     = useState<Purchase | null>(null);
+  const [toPay, setToPay]       = useState<Purchase | null>(null);
+  const [toDelete, setToDelete] = useState<Purchase | null>(null);
 
   const { data, isLoading } = useQuery({
     queryKey: ['purchases', { from, to, page }],
@@ -240,13 +353,6 @@ export default function ComprasPage() {
     queryFn:  purchasesService.getPending,
   });
 
-  const markPaidMut = useMutation({
-    mutationFn: purchasesService.markPaid,
-    onSuccess:  () => {
-      qc.invalidateQueries({ queryKey: ['purchases'] });
-      qc.invalidateQueries({ queryKey: ['purchases-pending'] });
-    },
-  });
 
   const purchases  = data?.data ?? [];
   const totalPages = data?.totalPages ?? 1;
@@ -289,7 +395,7 @@ export default function ComprasPage() {
           <table className="w-full text-sm">
             <thead>
               <tr className="bg-slate-50 border-b">
-                {['Fecha', 'Proveedor', 'Documento', 'Subtotal', 'IGV', 'Total', 'Estado', 'Registrado por', 'Acción'].map((h) => (
+                {['Fecha', 'Proveedor', 'Documento', 'Total', 'Estado', 'Registrado por', 'Acción'].map((h) => (
                   <th key={h} className="text-xs font-semibold text-slate-500 px-4 py-3 text-left">{h}</th>
                 ))}
               </tr>
@@ -304,22 +410,29 @@ export default function ComprasPage() {
                   <td className="px-4 py-3 text-slate-600">{formatDate(p.fecha)}</td>
                   <td className="px-4 py-3 font-medium text-slate-800">{p.supplier.razonSocial}</td>
                   <td className="px-4 py-3 text-slate-500 text-xs">{p.tipoDocumento && `${p.tipoDocumento} `}{p.numeroDocumento ?? '—'}</td>
-                  <td className="px-4 py-3 text-slate-600">{formatCurrency(Number(p.subtotal))}</td>
-                  <td className="px-4 py-3 text-slate-600">{formatCurrency(Number(p.igv))}</td>
                   <td className="px-4 py-3 font-bold text-slate-800">{formatCurrency(Number(p.total))}</td>
                   <td className="px-4 py-3">
                     <Badge variant={estadoVariant(p.estadoPago)}>{p.estadoPago}</Badge>
                   </td>
-                  <td className="px-4 py-3 text-slate-500 text-xs">—</td>
+                  <td className="px-4 py-3 text-slate-500 text-xs">
+                    {p.user ? `${p.user.nombre} ${p.user.apellido}` : '—'}
+                  </td>
                   <td className="px-4 py-3">
-                    {p.estadoPago !== 'pagado' && canCreate && (
-                      <button
-                        onClick={() => confirm('¿Marcar como pagado?') && markPaidMut.mutate(p.id)}
-                        className="flex items-center gap-1 text-xs text-emerald-600 hover:text-emerald-800 font-medium"
-                      >
-                        <CheckCircle size={13} /> Pagar
+                    <div className="flex items-center gap-1">
+                      <button onClick={() => setDetail(p)} className="p-1.5 rounded hover:bg-blue-50 text-slate-400 hover:text-blue-600" title="Ver detalle">
+                        <Eye size={15} />
                       </button>
-                    )}
+                      {p.estadoPago !== 'pagado' && canCreate && (
+                        <button onClick={() => setToPay(p)} className="p-1.5 rounded hover:bg-emerald-50 text-slate-400 hover:text-emerald-600" title="Marcar como pagado">
+                          <CheckCircle size={15} />
+                        </button>
+                      )}
+                      {canCreate && (
+                        <button onClick={() => setToDelete(p)} className="p-1.5 rounded hover:bg-red-50 text-slate-400 hover:text-red-500" title="Eliminar">
+                          <Trash2 size={15} />
+                        </button>
+                      )}
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -339,6 +452,9 @@ export default function ComprasPage() {
       </Card>
 
       <PurchaseModal open={modal} onClose={() => setModal(false)} />
+      {detail   && <DetailModal purchase={detail} onClose={() => setDetail(null)} />}
+      {toPay    && <MarkPaidModal purchase={toPay} onClose={() => setToPay(null)} />}
+      {toDelete && <DeletePurchaseModal purchase={toDelete} onClose={() => setToDelete(null)} />}
     </div>
   );
 }

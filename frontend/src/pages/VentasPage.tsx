@@ -569,9 +569,16 @@ function ScannerModal({ open, onClose, onScan }: {
 export default function VentasPage() {
   const qc = useQueryClient();
 
-  // Estado del carrito
-  const [cart, setCart]         = useState<CartItem[]>([]);
-  const [customer, setCustomer] = useState<Customer | null>(null);
+  // Estado del carrito (persistido en sessionStorage)
+  const [cart, setCart]         = useState<CartItem[]>(() => {
+    try { return JSON.parse(sessionStorage.getItem('pos_cart') ?? '[]'); } catch { return []; }
+  });
+  const [customer, setCustomer] = useState<Customer | null>(() => {
+    try { return JSON.parse(sessionStorage.getItem('pos_customer') ?? 'null'); } catch { return null; }
+  });
+
+  useEffect(() => { sessionStorage.setItem('pos_cart', JSON.stringify(cart)); }, [cart]);
+  useEffect(() => { sessionStorage.setItem('pos_customer', JSON.stringify(customer)); }, [customer]);
   const [search, setSearch]     = useState('');
   const [catFilter, setCatFilter] = useState('');
 

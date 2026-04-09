@@ -2,12 +2,12 @@ import api from '@/lib/api';
 import type { Supplier, Paginated } from '@/types';
 
 export interface CreateSupplierData {
-  razonSocial:  string;
-  ruc:          string;
-  contacto?:    string;
-  telefono?:    string;
-  email?:       string;
-  direccion?:   string;
+  razonSocial:      string;
+  ruc?:             string;
+  nombreContacto?:  string;
+  telefono?:        string;
+  email?:           string;
+  direccion?:       string;
 }
 
 export const suppliersService = {
@@ -30,5 +30,5 @@ export const suppliersService = {
     api.put<Supplier>(`/suppliers/${id}`, data).then((r) => r.data),
 
   delete: (id: string) =>
-    api.delete(`/suppliers/${id}`),
+    api.patch(`/suppliers/${id}/deactivate`),
 };

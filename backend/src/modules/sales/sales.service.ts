@@ -426,6 +426,131 @@ export class SalesService {
     };
   }
 
+  // ── COBRAR VENTA A CRÉDITO ───────────────────────────────────────────────
+
+  async registerCreditPayment(
+    id: string,
+    dto: { monto: number; paymentMethodId: string; referencia?: string },
+    userId: string,
+    businessId: string,
+  ) {
+    const sale = await this.prisma.sale.findFirst({
+      where: { id, businessId },
+      include: { payments: true },
+    });
+    if (!sale) throw new NotFoundException('Venta no encontrada');
+    if (sale.estado === 'anulada') throw new BadRequestException('La venta está anulada');
+    if (Number(sale.saldoPendiente) <= 0) throw new BadRequestException('La venta ya está pagada');
+    if (dto.monto <= 0 || dto.monto > Number(sale.saldoPendiente)) {
+      throw new BadRequestException(`Monto inválido. Saldo pendiente: ${sale.saldoPendiente}`);
+    }
+
+    // Resolver método de pago
+    const pm = await this.prisma.paymentMethod.findFirst({
+      where: { id: dto.paymentMethodId, businessId },
+    }) ?? await this.prisma.paymentMethod.findFirst({
+      where: { tipo: dto.paymentMethodId as any, businessId },
+    });
+    if (!pm) throw new NotFoundException('Método de pago no encontrado');
+
+    const nuevoSaldo = Number(sale.saldoPendiente) - dto.monto;
+    const nuevoMontoPagado = Number(sale.montoPagado) + dto.monto;
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.salePayment.create({
+        data: {
+          saleId: id,
+          paymentMethodId: pm.id,
+          monto: dto.monto,
+          referencia: dto.referencia ?? null,
+          fecha: new Date(),
+        },
+      });
+      await tx.sale.update({
+        where: { id },
+        data: {
+          montoPagado: nuevoMontoPagado,
+          saldoPendiente: nuevoSaldo,
+          estado: nuevoSaldo <= 0 ? 'activa' : 'pendiente_pago',
+        },
+      });
+      if (sale.customerId && nuevoSaldo <= 0) {
+        await tx.customer.update({
+          where: { id: sale.customerId },
+          data: { creditoUsado: { decrement: Number(sale.saldoPendiente) } },
+        });
+      }
+    });
+
+    return { message: 'Pago registrado', saldoPendiente: nuevoSaldo };
+  }
+
+  // ── DEVOLUCIÓN PARCIAL ───────────────────────────────────────────────────
+
+  async processReturn(
+    id: string,
+    dto: { items: { saleItemId: string; cantidad: number }[]; motivo: string },
+    userId: string,
+    businessId: string,
+  ) {
+    const sale = await this.prisma.sale.findFirst({
+      where: { id, businessId },
+      include: { items: { include: { product: true } } },
+    });
+    if (!sale) throw new NotFoundException('Venta no encontrada');
+    if (sale.estado === 'anulada') throw new BadRequestException('No se puede devolver una venta anulada');
+
+    // Validar items
+    for (const ret of dto.items) {
+      const saleItem = sale.items.find((i) => i.id === ret.saleItemId);
+      if (!saleItem) throw new BadRequestException(`Item ${ret.saleItemId} no pertenece a esta venta`);
+      if (ret.cantidad <= 0 || ret.cantidad > Number(saleItem.cantidad)) {
+        throw new BadRequestException(`Cantidad inválida para "${saleItem.product.nombre}"`);
+      }
+    }
+
+    // Devolver stock
+    for (const ret of dto.items) {
+      const saleItem = sale.items.find((i) => i.id === ret.saleItemId)!;
+      await this.inventoryService.registerMovement({
+        businessId,
+        productId: saleItem.productId,
+        userId,
+        tipo: 'devolucion',
+        cantidad: ret.cantidad,
+        referenciaId: sale.id,
+        referenciaTipo: 'sale_return',
+        observaciones: `Devolución: ${dto.motivo}`,
+      });
+    }
+
+    this.logger.log(`Devolución procesada para venta ${id} por usuario ${userId}`);
+    return { message: 'Devolución registrada y stock actualizado', saleId: id };
+  }
+
+  // ── VENTAS PENDIENTES DE COBRO ───────────────────────────────────────────
+
+  async getPendingCredit(businessId: string, page = 1, limit = 50) {
+    const skip = (page - 1) * limit;
+    const where = { businessId, estado: 'pendiente_pago' as any };
+    const [data, total] = await Promise.all([
+      this.prisma.sale.findMany({
+        where,
+        include: {
+          customer: { select: { id: true, nombreCompleto: true, numeroDocumento: true, telefono: true } },
+          user: { select: { id: true, nombre: true, apellido: true } },
+          payments: { include: { paymentMethod: { select: { nombre: true } } } },
+          items: { include: { product: { select: { nombre: true } } } },
+        },
+        orderBy: { fecha: 'desc' },
+        skip,
+        take: limit,
+      }),
+      this.prisma.sale.count({ where }),
+    ]);
+    return { data, total, page, limit, totalPages: Math.ceil(total / limit) };
+  }
+
   async getDailySeries(businessId: string, month?: number, year?: number) {
     const now = new Date();
     const y = year ?? now.getFullYear();

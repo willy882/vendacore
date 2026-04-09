@@ -16,19 +16,11 @@ import { CurrentUser } from '../../common/decorators/current-user.decorator';
 export class SalesController {
   constructor(private service: SalesService) {}
 
-  /**
-   * GET /api/v1/sales/payment-methods
-   * Lista de métodos de pago activos del negocio
-   */
   @Get('payment-methods')
   getPaymentMethods(@CurrentUser() user: any) {
     return this.service.getPaymentMethods(user.businessId);
   }
 
-  /**
-   * GET /api/v1/sales/summary?period=today|week|month|year
-   * KPIs del período: total ventas, ticket promedio, transacciones
-   */
   @Get('summary')
   getSummary(
     @CurrentUser() user: any,
@@ -37,10 +29,6 @@ export class SalesController {
     return this.service.getSummary(user.businessId, period);
   }
 
-  /**
-   * GET /api/v1/sales/daily-series?month=4&year=2026
-   * Serie de ventas diarias para gráfico de barras
-   */
   @Get('daily-series')
   getDailySeries(
     @CurrentUser() user: any,
@@ -50,28 +38,26 @@ export class SalesController {
     return this.service.getDailySeries(user.businessId, month, year);
   }
 
-  /**
-   * GET /api/v1/sales
-   * Historial de ventas con filtros
-   */
+  /** Ventas a crédito pendientes — debe ir antes de :id */
+  @Get('pending-credit')
+  getPendingCredit(
+    @CurrentUser() user: any,
+    @Query('page') page?: number,
+    @Query('limit') limit?: number,
+  ) {
+    return this.service.getPendingCredit(user.businessId, page, limit);
+  }
+
   @Get()
   findAll(@Query() query: QuerySaleDto, @CurrentUser() user: any) {
     return this.service.findAll(query, user.businessId);
   }
 
-  /**
-   * GET /api/v1/sales/:id
-   * Detalle completo de una venta
-   */
   @Get(':id')
   findOne(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: any) {
     return this.service.findOne(id, user.businessId);
   }
 
-  /**
-   * POST /api/v1/sales
-   * Registrar nueva venta (POS)
-   */
   @Roles('administrador', 'supervisor', 'cajero', 'vendedor')
   @Post()
   @HttpCode(HttpStatus.CREATED)
@@ -79,10 +65,6 @@ export class SalesController {
     return this.service.create(dto, user.id, user.businessId);
   }
 
-  /**
-   * PATCH /api/v1/sales/:id/cancel
-   * Anular venta con motivo obligatorio
-   */
   @Roles('administrador', 'supervisor', 'cajero')
   @Patch(':id/cancel')
   cancel(
@@ -91,5 +73,25 @@ export class SalesController {
     @CurrentUser() user: any,
   ) {
     return this.service.cancel(id, dto, user.id, user.businessId);
+  }
+
+  @Roles('administrador', 'supervisor', 'cajero')
+  @Post(':id/credit-payment')
+  registerCreditPayment(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() body: { monto: number; paymentMethodId: string; referencia?: string },
+    @CurrentUser() user: any,
+  ) {
+    return this.service.registerCreditPayment(id, body, user.id, user.businessId);
+  }
+
+  @Roles('administrador', 'supervisor')
+  @Post(':id/return')
+  processReturn(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() body: { items: { saleItemId: string; cantidad: number }[]; motivo: string },
+    @CurrentUser() user: any,
+  ) {
+    return this.service.processReturn(id, body, user.id, user.businessId);
   }
 }
