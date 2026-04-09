@@ -748,4 +748,136 @@ export class ReportsService {
     res.setHeader('Content-Length', buf.length);
     res.end(buf);
   }
+
+  // ── EXCEL: Cobranzas ─────────────────────────────────────────────────────
+
+  async exportCobranzasExcel(businessId: string, from: Date, to: Date, res: Response) {
+    const [payments, businessName] = await Promise.all([
+      this.prisma.salePayment.findMany({
+        where: { sale: { businessId }, fecha: { gte: from, lte: to } },
+        include: {
+          paymentMethod: { select: { nombre: true, tipo: true } },
+          sale: {
+            select: {
+              id: true, total: true, saldoPendiente: true,
+              customer: { select: { nombreCompleto: true, numeroDocumento: true } },
+              user:     { select: { nombre: true, apellido: true } },
+            },
+          },
+        },
+        orderBy: { fecha: 'asc' },
+      }),
+      this.getBusinessName(businessId),
+    ]);
+
+    const wb = new ExcelJS.Workbook();
+    addWorkbookMeta(wb, 'Reporte de Cobranzas', businessName);
+
+    // Hoja principal
+    const ws = wb.addWorksheet('Cobros');
+    ws.columns = [
+      { key: 'fecha',    header: 'Fecha Cobro',    width: 20 },
+      { key: 'cliente',  header: 'Cliente',         width: 32 },
+      { key: 'doc',      header: 'Doc. Cliente',    width: 16 },
+      { key: 'venta',    header: 'Venta #',         width: 14 },
+      { key: 'metodo',   header: 'Método Pago',     width: 20 },
+      { key: 'monto',    header: 'Monto Cobrado',   width: 16 },
+      { key: 'totalVenta',header: 'Total Venta',    width: 16 },
+      { key: 'saldo',    header: 'Saldo Restante',  width: 16 },
+      { key: 'referencia',header: 'Referencia',     width: 22 },
+      { key: 'vendedor', header: 'Registrado por',  width: 24 },
+    ];
+    applyTableHeader(ws.getRow(1));
+
+    const totalCobrado = payments.reduce((a, p) => a + Number(p.monto), 0);
+
+    payments.forEach((p, idx) => {
+      const row = ws.addRow({
+        fecha:      new Date(p.fecha).toLocaleString('es-PE'),
+        cliente:    p.sale?.customer?.nombreCompleto ?? '—',
+        doc:        p.sale?.customer?.numeroDocumento ?? '—',
+        venta:      p.sale?.id?.slice(-8).toUpperCase() ?? '—',
+        metodo:     p.paymentMethod?.nombre ?? '—',
+        monto:      fmt(Number(p.monto)),
+        totalVenta: fmt(Number(p.sale?.total ?? 0)),
+        saldo:      fmt(Number(p.sale?.saldoPendiente ?? 0)),
+        referencia: p.referencia ?? '—',
+        vendedor:   p.sale?.user ? `${p.sale.user.nombre} ${p.sale.user.apellido}` : '—',
+      });
+      applyDataRow(row, idx % 2 !== 0);
+    });
+
+    // Fila de total
+    const totalRow = ws.addRow({ monto: `TOTAL: S/ ${fmt(totalCobrado)}` });
+    totalRow.font = { bold: true };
+    totalRow.getCell('monto').fill = HEADER_FILL;
+    totalRow.getCell('monto').font = { ...HEADER_FONT };
+
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition',
+      `attachment; filename="cobranzas_${from.toISOString().split('T')[0]}_${to.toISOString().split('T')[0]}.xlsx"`);
+    await wb.xlsx.write(res);
+    res.end();
+  }
+
+  // ── PDF: Cobranzas ────────────────────────────────────────────────────────
+
+  async exportCobranzasPdf(businessId: string, from: Date, to: Date, res: Response) {
+    const [payments, businessName] = await Promise.all([
+      this.prisma.salePayment.findMany({
+        where: { sale: { businessId }, fecha: { gte: from, lte: to } },
+        include: {
+          paymentMethod: { select: { nombre: true } },
+          sale: {
+            select: {
+              id: true, total: true, saldoPendiente: true,
+              customer: { select: { nombreCompleto: true, numeroDocumento: true } },
+            },
+          },
+        },
+        orderBy: { fecha: 'asc' },
+      }),
+      this.getBusinessName(businessId),
+    ]);
+
+    const totalCobrado = payments.reduce((a, p) => a + Number(p.monto), 0);
+
+    const buf = await buildPdf({ margin: 40, size: 'A4', layout: 'landscape' }, (doc) => {
+      addPdfHeader(doc, 'REPORTE DE COBRANZAS', businessName, fmtDate(from), fmtDate(to));
+
+      doc.fontSize(10).fillColor('#1E293B')
+        .text(
+          `Total cobrado: S/ ${fmt(totalCobrado)}   |   Registros: ${payments.length}`,
+          { align: 'center' },
+        );
+      doc.moveDown(0.6);
+
+      pdfTable(
+        doc,
+        ['Fecha', 'Cliente', 'Venta #', 'Método', 'Cobrado', 'Saldo Rest.', 'Referencia'],
+        payments.map((p) => [
+          new Date(p.fecha).toLocaleDateString('es-PE'),
+          (p.sale?.customer?.nombreCompleto ?? '—').slice(0, 28),
+          p.sale?.id?.slice(-8).toUpperCase() ?? '—',
+          p.paymentMethod?.nombre ?? '—',
+          `S/ ${fmt(Number(p.monto))}`,
+          `S/ ${fmt(Number(p.sale?.saldoPendiente ?? 0))}`,
+          p.referencia ?? '—',
+        ]),
+        [85, 120, 60, 80, 70, 75, 80],
+      );
+
+      // Resumen al final
+      doc.moveDown(0.5);
+      doc.fontSize(10).fillColor('#1E293B').font('Helvetica-Bold')
+        .text(`Total cobrado en el período: S/ ${fmt(totalCobrado)}`, { align: 'right' });
+
+      addPdfFooter(doc);
+    });
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="cobranzas_${from.toISOString().split('T')[0]}.pdf"`);
+    res.setHeader('Content-Length', buf.length);
+    res.end(buf);
+  }
 }

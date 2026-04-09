@@ -63,4 +63,7 @@ export const salesService = {
 
   processReturn: (id: string, data: { items: { saleItemId: string; cantidad: number }[]; motivo: string }) =>
     api.post(`/sales/${id}/return`, data).then((r) => r.data),
+
+  getCreditPaymentHistory: (params: { page?: number; limit?: number; from?: string; to?: string; search?: string }) =>
+    api.get('/sales/credit-payment-history', { params }).then((r) => r.data),
 };

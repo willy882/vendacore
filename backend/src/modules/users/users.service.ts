@@ -103,6 +103,25 @@ export class UsersService {
     return safe;
   }
 
+  async changeOwnPassword(
+    userId: string,
+    currentPassword: string,
+    newPassword: string,
+  ) {
+    const user = await this.prisma.user.findUnique({ where: { id: userId } });
+    if (!user) throw new NotFoundException('Usuario no encontrado');
+
+    const valid = await bcrypt.compare(currentPassword, user.passwordHash);
+    if (!valid) throw new BadRequestException('La contraseña actual es incorrecta');
+
+    const hash = await bcrypt.hash(newPassword, BCRYPT_ROUNDS);
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: { passwordHash: hash },
+    });
+    return { message: 'Contraseña actualizada correctamente' };
+  }
+
   async deactivate(id: string, businessId: string) {
     await this.findOne(id, businessId);
     return this.prisma.user.update({

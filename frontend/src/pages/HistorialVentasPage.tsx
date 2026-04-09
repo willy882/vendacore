@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Search, ChevronLeft, ChevronRight, Eye, XCircle,
-  CalendarDays, User, Receipt, AlertTriangle,
+  CalendarDays, User, Receipt, AlertTriangle, RotateCcw, Minus, Plus,
 } from 'lucide-react';
 import { salesService } from '@/services/sales.service';
 import { Card } from '@/components/ui/Card';
@@ -192,6 +192,92 @@ function CancelModal({
   );
 }
 
+// ─── Modal de devolución ───────────────────────────────────────────────────────
+
+function ReturnModal({ sale, onClose }: { sale: Sale; onClose: () => void }) {
+  const qc = useQueryClient();
+  const [motivo, setMotivo] = useState('');
+  const [quantities, setQuantities] = useState<Record<string, number>>(() =>
+    Object.fromEntries((sale.items ?? []).map((i: any) => [i.id, 0]))
+  );
+  const [err, setErr] = useState('');
+
+  const returnMut = useMutation({
+    mutationFn: () => salesService.processReturn(sale.id, {
+      items: Object.entries(quantities)
+        .filter(([, qty]) => qty > 0)
+        .map(([saleItemId, cantidad]) => ({ saleItemId, cantidad })),
+      motivo,
+    }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['sales'] });
+      onClose();
+    },
+    onError: (e: any) => setErr(e?.response?.data?.message ?? 'Error al procesar devolución'),
+  });
+
+  const handleConfirm = () => {
+    const hasItems = Object.values(quantities).some((q) => q > 0);
+    if (!hasItems) { setErr('Selecciona al menos un producto a devolver'); return; }
+    if (!motivo.trim() || motivo.trim().length < 5) { setErr('Ingresa un motivo (mínimo 5 caracteres)'); return; }
+    setErr('');
+    returnMut.mutate();
+  };
+
+  const setQty = (id: string, val: number, max: number) =>
+    setQuantities((prev) => ({ ...prev, [id]: Math.max(0, Math.min(val, max)) }));
+
+  return (
+    <Modal open onClose={onClose} title="Procesar devolución" size="md"
+      footer={
+        <>
+          <Button variant="outline" onClick={onClose}>Cancelar</Button>
+          <Button onClick={handleConfirm} loading={returnMut.isPending} icon={<RotateCcw size={15} />}>
+            Confirmar devolución
+          </Button>
+        </>
+      }
+    >
+      <div className="space-y-4 text-sm">
+        <div className="bg-blue-50 border border-blue-200 rounded-xl p-3">
+          <p className="font-semibold text-blue-800">Venta #{sale.id.slice(-8).toUpperCase()}</p>
+          <p className="text-blue-600 text-xs mt-0.5">El stock de los productos devueltos se repondrá automáticamente.</p>
+        </div>
+
+        <div>
+          <p className="font-medium text-slate-700 mb-2">Selecciona los productos a devolver:</p>
+          <div className="space-y-2 max-h-52 overflow-y-auto">
+            {(sale.items ?? []).map((item: any) => {
+              const max = Number(item.cantidad);
+              const qty = quantities[item.id] ?? 0;
+              return (
+                <div key={item.id} className="flex items-center gap-3 bg-slate-50 rounded-xl px-3 py-2 border border-slate-200">
+                  <div className="flex-1">
+                    <p className="font-medium text-slate-800">{item.product.nombre}</p>
+                    <p className="text-xs text-slate-500">Cant. vendida: {max} · {formatCurrency(Number(item.precioUnitario))} c/u</p>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <button onClick={() => setQty(item.id, qty - 1, max)} className="w-7 h-7 rounded-lg bg-slate-200 hover:bg-slate-300 flex items-center justify-center transition-colors"><Minus size={12} /></button>
+                    <span className={`w-8 text-center font-semibold text-sm ${qty > 0 ? 'text-blue-600' : 'text-slate-400'}`}>{qty}</span>
+                    <button onClick={() => setQty(item.id, qty + 1, max)} className="w-7 h-7 rounded-lg bg-slate-200 hover:bg-slate-300 flex items-center justify-center transition-colors"><Plus size={12} /></button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        <div>
+          <label className="block text-xs font-medium text-slate-600 mb-1">Motivo de devolución *</label>
+          <Textarea value={motivo} onChange={(e) => setMotivo(e.target.value)} placeholder="Ej: Producto defectuoso, error en pedido..." rows={2} />
+        </div>
+
+        {err && <p className="text-sm text-red-600 bg-red-50 border border-red-200 rounded px-3 py-2">{err}</p>}
+      </div>
+    </Modal>
+  );
+}
+
 // ─── Página principal ──────────────────────────────────────────────────────────
 
 export default function HistorialVentasPage() {
@@ -207,6 +293,7 @@ export default function HistorialVentasPage() {
   const [page,       setPage]       = useState(1);
   const [selected,   setSelected]   = useState<Sale | null>(null);
   const [toCancel,   setToCancel]   = useState<Sale | null>(null);
+  const [toReturn,   setToReturn]   = useState<Sale | null>(null);
 
   const { data, isLoading } = useQuery({
     queryKey: ['sales', { from, to, estado: estadoFilt, page }],
@@ -349,6 +436,15 @@ export default function HistorialVentasPage() {
                             <XCircle size={16} />
                           </button>
                         )}
+                        {canCancel && sale.estado === 'activa' && (
+                          <button
+                            title="Devolver productos"
+                            onClick={() => setToReturn(sale)}
+                            className="p-1.5 rounded-lg text-slate-400 hover:text-amber-600 hover:bg-amber-50 transition-colors"
+                          >
+                            <RotateCcw size={16} />
+                          </button>
+                        )}
                       </div>
                     </td>
                   </tr>
@@ -392,6 +488,9 @@ export default function HistorialVentasPage() {
       )}
       {toCancel && (
         <CancelModal sale={toCancel} onClose={() => setToCancel(null)} />
+      )}
+      {toReturn && (
+        <ReturnModal sale={toReturn} onClose={() => setToReturn(null)} />
       )}
     </div>
   );

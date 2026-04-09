@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useForm } from 'react-hook-form';
 import {
@@ -58,24 +58,26 @@ function BusinessInfoSection() {
   const [logoUrl, setLogoUrl] = useState<string | null>(null);
   const [logoLoading, setLogoLoading] = useState(false);
 
-  const { data: biz, isLoading } = useQuery({
-    queryKey: ['business-me'],
-    queryFn: businessService.getMe,
-    onSuccess: (d) => {
-      reset({
-        razonSocial:    d.razonSocial,
-        nombreComercial: d.nombreComercial ?? '',
-        direccion:      d.direccion ?? '',
-        telefono:       d.telefono ?? '',
-        email:          d.email ?? '',
-      });
-      setLogoUrl(d.logoUrl ?? null);
-    },
-  } as any);
-
   const { register, handleSubmit, reset, formState: { isSubmitting, isDirty } } = useForm({
     defaultValues: { razonSocial: '', nombreComercial: '', direccion: '', telefono: '', email: '' },
   });
+
+  const { data: biz, isLoading } = useQuery({
+    queryKey: ['business-me'],
+    queryFn: businessService.getMe,
+  });
+
+  useEffect(() => {
+    if (!biz) return;
+    reset({
+      razonSocial:     biz.razonSocial,
+      nombreComercial: biz.nombreComercial ?? '',
+      direccion:       biz.direccion ?? '',
+      telefono:        biz.telefono ?? '',
+      email:           biz.email ?? '',
+    });
+    setLogoUrl(biz.logoUrl ?? null);
+  }, [biz]);
 
   const mut = useMutation({
     mutationFn: (data: any) => businessService.updateMe({ ...data, logoUrl: logoUrl ?? undefined }),

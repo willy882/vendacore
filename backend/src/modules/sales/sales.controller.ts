@@ -38,6 +38,21 @@ export class SalesController {
     return this.service.getDailySeries(user.businessId, month, year);
   }
 
+  /** Historial de cobros realizados — debe ir antes de :id */
+  @Get('credit-payment-history')
+  getCreditPaymentHistory(
+    @CurrentUser() user: any,
+    @Query('page') page?: number,
+    @Query('limit') limit?: number,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+    @Query('search') search?: string,
+  ) {
+    return this.service.getCreditPaymentHistory(
+      user.businessId, page, limit, from, to, search,
+    );
+  }
+
   /** Ventas a crédito pendientes — debe ir antes de :id */
   @Get('pending-credit')
   getPendingCredit(

@@ -34,6 +34,19 @@ export class UsersController {
     return this.usersService.update(user.id, dto, user.businessId);
   }
 
+  /** POST /api/v1/users/me/change-password — Cambiar contraseña propia */
+  @Post('me/change-password')
+  changeOwnPassword(
+    @CurrentUser() user: any,
+    @Body() body: { currentPassword: string; newPassword: string },
+  ) {
+    return this.usersService.changeOwnPassword(
+      user.id,
+      body.currentPassword,
+      body.newPassword,
+    );
+  }
+
   /** GET /api/v1/users — Lista todos los usuarios del negocio */
   @Roles('administrador', 'supervisor')
   @Get()

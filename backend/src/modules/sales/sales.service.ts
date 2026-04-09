@@ -551,6 +551,59 @@ export class SalesService {
     return { data, total, page, limit, totalPages: Math.ceil(total / limit) };
   }
 
+  // ── HISTORIAL DE COBROS ──────────────────────────────────────────────────
+
+  async getCreditPaymentHistory(
+    businessId: string,
+    page = 1,
+    limit = 20,
+    from?: string,
+    to?: string,
+    search?: string,
+  ) {
+    const skip = (page - 1) * limit;
+    const dateFilter: any = {};
+    if (from) dateFilter.gte = new Date(from);
+    if (to)   dateFilter.lte = new Date(to + 'T23:59:59');
+
+    const where: any = {
+      sale: { businessId },
+      ...(Object.keys(dateFilter).length ? { fecha: dateFilter } : {}),
+      ...(search ? {
+        sale: {
+          businessId,
+          customer: {
+            nombreCompleto: { contains: search, mode: 'insensitive' },
+          },
+        },
+      } : {}),
+    };
+
+    const [data, total] = await Promise.all([
+      this.prisma.salePayment.findMany({
+        where,
+        include: {
+          paymentMethod: { select: { nombre: true, tipo: true } },
+          sale: {
+            select: {
+              id: true,
+              total: true,
+              saldoPendiente: true,
+              customer: { select: { id: true, nombreCompleto: true, numeroDocumento: true } },
+              user: { select: { nombre: true, apellido: true } },
+            },
+          },
+        },
+        orderBy: { fecha: 'desc' },
+        skip,
+        take: limit,
+      }),
+      this.prisma.salePayment.count({ where }),
+    ]);
+
+    return { data, total, page, limit, totalPages: Math.ceil(total / limit) };
+  }
+
   async getDailySeries(businessId: string, month?: number, year?: number) {
     const now = new Date();
     const y = year ?? now.getFullYear();

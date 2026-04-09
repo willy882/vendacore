@@ -1,7 +1,4 @@
-import {
-  Controller, Get, Query, Res,
-  ParseIntPipe, DefaultValuePipe,
-} from '@nestjs/common';
+import { Controller, Get, Query, Res } from '@nestjs/common';
 import type { Response } from 'express';
 import { ReportsService } from './reports.service';
 import { Roles } from '../../common/decorators/roles.decorator';
@@ -99,5 +96,27 @@ export class ReportsController {
   ) {
     const range = parseDateRange(from, to);
     return this.service.exportDocumentsPdf(user.businessId, range.from, range.to, res);
+  }
+
+  @Get('excel/cobranzas')
+  exportCobranzasExcel(
+    @CurrentUser() user: any,
+    @Res() res: Response,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+  ) {
+    const range = parseDateRange(from, to);
+    return this.service.exportCobranzasExcel(user.businessId, range.from, range.to, res);
+  }
+
+  @Get('pdf/cobranzas')
+  exportCobranzasPdf(
+    @CurrentUser() user: any,
+    @Res() res: Response,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+  ) {
+    const range = parseDateRange(from, to);
+    return this.service.exportCobranzasPdf(user.businessId, range.from, range.to, res);
   }
 }

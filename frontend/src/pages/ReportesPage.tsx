@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import {
   FileSpreadsheet, FileText, Calendar,
-  ShoppingCart, Package, DollarSign, FileCheck,
+  ShoppingCart, Package, DollarSign, FileCheck, CreditCard,
 } from 'lucide-react';
 import { Card, CardHeader, CardTitle } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
@@ -69,6 +69,16 @@ const REPORTS: ReportDef[] = [
     color:        'bg-amber-50 text-amber-600',
     hasDateRange: true,
     pdfPath:      '/reports/pdf/comprobantes',
+  },
+  {
+    key:          'cobranzas',
+    label:        'Cobranzas',
+    description:  'Historial de cobros registrados en ventas a crédito. Detalle de montos cobrados, saldos y métodos de pago.',
+    icon:         <CreditCard size={22} />,
+    color:        'bg-teal-50 text-teal-600',
+    hasDateRange: true,
+    excelPath:    '/reports/excel/cobranzas',
+    pdfPath:      '/reports/pdf/cobranzas',
   },
 ];
 
