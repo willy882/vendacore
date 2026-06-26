@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query';
-import { Search, ChevronLeft, Plus, Trash2, BookOpen, FileText, X, Eye, ToggleLeft, ToggleRight, Square, CheckCircle, AlertCircle } from 'lucide-react';
+import { Search, ChevronLeft, Plus, Trash2, BookOpen, FileText, X, Eye, ToggleLeft, ToggleRight, Square, CheckCircle, AlertCircle, ScanLine } from 'lucide-react';
 import { productsService } from '@/services/products.service';
 import { salesService } from '@/services/sales.service';
 import { businessService } from '@/services/business.service';
@@ -1049,6 +1049,60 @@ function CobrarModal({ total, items, onClose, onVentaOk }: {
   );
 }
 
+// ── Modal Scanner de Cámara ───────────────────────────────────────────────────
+function BarcodeScannerModal({ onDetected, onClose }: { onDetected: (code: string) => void; onClose: () => void }) {
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const readerRef = useRef<any>(null);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    let active = true;
+    import('@zxing/browser').then(({ BrowserMultiFormatReader }) => {
+      if (!active) return;
+      const reader = new BrowserMultiFormatReader();
+      readerRef.current = reader;
+      reader.decodeFromVideoDevice(undefined, videoRef.current!, (result, err) => {
+        if (result && active) {
+          active = false;
+          onDetected(result.getText());
+        }
+        if (err && !(err.message?.includes('No MultiFormat'))) {
+          // errores de no-lectura son normales, ignorar
+        }
+      }).catch(() => {
+        if (active) setError('No se pudo acceder a la cámara. Verifica los permisos.');
+      });
+    });
+    return () => {
+      active = false;
+      readerRef.current?.reset();
+    };
+  }, [onDetected]);
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden">
+        <div className="flex items-center justify-between px-4 py-3 bg-slate-900">
+          <span className="text-white font-semibold text-sm flex items-center gap-2">
+            <ScanLine size={16} /> Escanear código de barras
+          </span>
+          <button onClick={onClose} className="text-red-400 hover:text-red-300"><X size={20} /></button>
+        </div>
+        <div className="p-4">
+          {error ? (
+            <p className="text-red-500 text-sm text-center py-8">{error}</p>
+          ) : (
+            <>
+              <video ref={videoRef} className="w-full rounded-lg border-2 border-blue-400" style={{ height: 240, objectFit: 'cover' }} />
+              <p className="text-xs text-slate-500 text-center mt-3">Apunta la cámara al código de barras del producto</p>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Página POS ────────────────────────────────────────────────────────────────
 
 export default function PuntoVentaPage() {
@@ -1065,6 +1119,7 @@ export default function PuntoVentaPage() {
   const searchRef  = useRef<HTMLInputElement>(null);
   const stockTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [stockMsg, setStockMsg] = useState<string | null>(null);
+  const [showScanner, setShowScanner] = useState(false);
 
   const showStockAlert = (msg: string) => {
     setStockMsg(msg);
@@ -1200,6 +1255,10 @@ export default function PuntoVentaPage() {
                 className="flex-1 text-sm outline-none"
               />
               <Search size={18} className="text-blue-500 flex-shrink-0" />
+              <button onClick={() => setShowScanner(true)} title="Escanear con cámara"
+                className="text-slate-400 hover:text-blue-500 transition-colors flex-shrink-0">
+                <ScanLine size={18} />
+              </button>
             </div>
           </div>
         </div>
@@ -1380,6 +1439,27 @@ export default function PuntoVentaPage() {
           onSave={updateItem}
           onDelete={removeItem}
           onClose={() => setEditingItem(null)}
+        />
+      )}
+      {showScanner && (
+        <BarcodeScannerModal
+          onClose={() => setShowScanner(false)}
+          onDetected={(code) => {
+            setShowScanner(false);
+            setSearch(code);
+            setView('products');
+            // Si hay exactamente 1 resultado tras la búsqueda, lo agrega automáticamente
+            setTimeout(() => {
+              const match = (productsData?.data ?? []).find(
+                (p: any) => p.codigoBarras === code || p.codigoInterno === code
+              );
+              if (match && Number(match.stockActual ?? 0) > 0) {
+                addItem({ productId: match.id, descripcion: match.nombre, precio: Number(match.precioVenta), cantidad: 1, stock: match.stockActual });
+                setSearch('');
+                setView('categories');
+              }
+            }, 600);
+          }}
         />
       )}
       {showAddModal && <AddItemModal onAdd={addItem} onClose={() => setShowAddModal(false)} />}
