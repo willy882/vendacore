@@ -15,7 +15,7 @@ export const cashService = {
     api.post<CashSession>('/cash/open', { montoApertura, observaciones }).then((r) => r.data),
 
   close: (sessionId: string, montoCierreReal: number, observaciones?: string) =>
-    api.post<CashSession>(`/cash/${sessionId}/close`, { montoCierreReal, observaciones }).then((r) => r.data),
+    api.post<{ session: CashSession; resumen: Record<string, any> }>(`/cash/${sessionId}/close`, { montoCierreReal, observaciones }).then((r) => r.data),
 
   addMovement: (sessionId: string, data: {
     tipo:        'ingreso' | 'egreso';

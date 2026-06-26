@@ -1,6 +1,6 @@
 import {
   Controller, Get, Patch, Post, Param, Body,
-  UseGuards, ParseUUIDPipe,
+  UseGuards,
 } from '@nestjs/common';
 import { BusinessService } from './business.service';
 import { UpdateBusinessDto } from './dto/update-business.dto';
@@ -18,6 +18,12 @@ export class BusinessController {
   @Get('me')
   getMe(@CurrentUser() user: any) {
     return this.service.findOne(user.businessId);
+  }
+
+  /** GET /api/v1/business/subscription */
+  @Get('subscription')
+  getSubscription(@CurrentUser() user: any) {
+    return this.service.getSubscription(user.businessId);
   }
 
   /** PATCH /api/v1/business/me */

@@ -2,7 +2,7 @@ import axios, { AxiosError } from 'axios';
 import { useAuthStore } from '@/stores/auth.store';
 
 // build:2026-04-05
-const PROD_URL = 'https://backend-production-65fc.up.railway.app/api/v1';
+const PROD_URL = 'https://vendacore-backend.fly.dev/api/v1';
 const BASE_URL = import.meta.env.DEV ? '/api/v1' : PROD_URL;
 
 const api = axios.create({

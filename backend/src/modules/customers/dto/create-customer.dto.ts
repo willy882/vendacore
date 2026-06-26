@@ -33,8 +33,23 @@ export class CreateCustomerDto {
   @IsString() @IsOptional()
   direccion?: string;
 
+  @IsString() @MaxLength(150) @IsOptional()
+  distrito?: string;
+
+  @IsString() @MaxLength(100) @IsOptional()
+  departamento?: string;
+
+  @IsString() @MaxLength(100) @IsOptional()
+  provincia?: string;
+
   @IsString() @MaxLength(10) @IsOptional()
   ubigeo?: string;
+
+  @IsString() @MaxLength(200) @IsOptional()
+  referencia?: string;
+
+  @IsString() @MaxLength(500) @IsOptional()
+  nota?: string;
 
   @IsNumber({ maxDecimalPlaces: 2 }) @Min(0) @Type(() => Number) @IsOptional()
   creditoLimite?: number;

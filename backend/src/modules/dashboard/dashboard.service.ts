@@ -201,7 +201,7 @@ export class DashboardService {
       take: limit,
     });
 
-    const ids = grouped.map((g) => g.productId);
+    const ids = grouped.map((g) => g.productId).filter((id): id is string => id !== null);
     const products = await this.prisma.product.findMany({
       where: { id: { in: ids } },
       select: { id: true, nombre: true, codigoInterno: true, precioVenta: true,
@@ -210,7 +210,7 @@ export class DashboardService {
     const map = new Map(products.map((p) => [p.id, p]));
 
     return grouped.map((g) => ({
-      ...map.get(g.productId),
+      ...(g.productId ? map.get(g.productId) : {}),
       cantidadVendida: Number(g._sum.cantidad ?? 0),
       ingresoTotal:    Number(g._sum.total ?? 0),
       transacciones:   g._count.id,

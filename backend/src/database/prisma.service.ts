@@ -10,7 +10,8 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
     const connectionString = process.env.DATABASE_URL!;
     // Neon y otras DBs en la nube requieren SSL; local no lo necesita
     const ssl = connectionString.includes('sslmode=require') || connectionString.includes('neon.tech');
-    const adapter = new PrismaPg({ connectionString, ssl });
+    const poolSize = parseInt(process.env.DB_POOL_SIZE ?? '10', 10);
+    const adapter = new PrismaPg({ connectionString, ssl, max: poolSize });
     super({ adapter } as any);
   }
 

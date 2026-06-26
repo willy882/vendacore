@@ -18,6 +18,63 @@ function parseDateRange(from?: string, to?: string): { from: Date; to: Date } {
 export class ReportsController {
   constructor(private service: ReportsService) {}
 
+  // ── Reporte productos vendidos ───────────────────────────────────────────
+
+  // ── PLE / Registros contables ────────────────────────────────────────────
+
+  @Get('ple-ventas')
+  getPleVentas(
+    @CurrentUser() user: any,
+    @Query('year')  year?: string,
+    @Query('month') month?: string,
+  ) {
+    const y = Number(year)  || new Date().getFullYear();
+    const m = Number(month) || new Date().getMonth() + 1;
+    return this.service.getPleVentas(user.businessId, y, m);
+  }
+
+  @Get('ple-compras')
+  getPleCompras(
+    @CurrentUser() user: any,
+    @Query('year')  year?: string,
+    @Query('month') month?: string,
+  ) {
+    const y = Number(year)  || new Date().getFullYear();
+    const m = Number(month) || new Date().getMonth() + 1;
+    return this.service.getPleCompras(user.businessId, y, m);
+  }
+
+  @Get('ventas-anuales')
+  getVentasAnuales(
+    @CurrentUser() user: any,
+    @Query('year') year?: string,
+  ) {
+    const y = Number(year) || new Date().getFullYear();
+    return this.service.getVentasAnuales(user.businessId, y);
+  }
+
+  @Get('ventas-por-usuario')
+  getVentasPorUsuario(
+    @CurrentUser() user: any,
+    @Query('from')    from?: string,
+    @Query('to')      to?: string,
+    @Query('userId')  userId?: string,
+  ) {
+    const range = parseDateRange(from, to);
+    return this.service.getVentasPorUsuario(user.businessId, range.from, range.to, userId);
+  }
+
+  @Get('productos-vendidos')
+  getProductosVendidos(
+    @CurrentUser() user: any,
+    @Query('from') from?: string,
+    @Query('to')   to?: string,
+    @Query('search') search?: string,
+  ) {
+    const range = parseDateRange(from, to);
+    return this.service.getProductosVendidos(user.businessId, range.from, range.to, search);
+  }
+
   // ── Excel ────────────────────────────────────────────────────────────────
 
   @Get('excel/ventas')

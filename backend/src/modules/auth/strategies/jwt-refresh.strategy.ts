@@ -16,7 +16,7 @@ export class JwtRefreshStrategy extends PassportStrategy(Strategy, 'jwt-refresh'
     });
   }
 
-  async validate(req: Request, payload: JwtPayload) {
+  async validate(_req: Request, payload: JwtPayload) {
     const user = await this.prisma.user.findUnique({
       where: { id: payload.sub },
       include: { role: true },
@@ -24,6 +24,11 @@ export class JwtRefreshStrategy extends PassportStrategy(Strategy, 'jwt-refresh'
 
     if (!user || !user.isActive) {
       throw new UnauthorizedException('Refresh token inválido');
+    }
+
+    // Si el token incluye tokenVersion, verificar que coincida (invalidado por logout)
+    if (typeof payload.tokenVersion === 'number' && user.tokenVersion !== payload.tokenVersion) {
+      throw new UnauthorizedException('Sesión expirada. Inicia sesión nuevamente.');
     }
 
     return user;

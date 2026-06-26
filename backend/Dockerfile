@@ -2,7 +2,7 @@ FROM node:20-alpine
 WORKDIR /app
 
 COPY package*.json ./
-RUN npm ci
+RUN npm install
 
 COPY prisma ./prisma
 COPY tsconfig.json nest-cli.json ./
@@ -16,4 +16,4 @@ RUN npx @nestjs/cli build
 ENV NODE_ENV=production
 EXPOSE 4000
 
-CMD ["sh", "-c", "npx prisma db push --schema=prisma/schema.prisma --accept-data-loss && node dist/main"]
+CMD ["node", "dist/main"]

@@ -43,8 +43,9 @@ function AdjustModal({ open, onClose, products }: { open: boolean; onClose: () =
       costoUnitario:  d.costoUnitario ? parseFloat(d.costoUnitario) : undefined,
     }),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['products'] });
+      qc.refetchQueries({ queryKey: ['products'] });
       qc.invalidateQueries({ queryKey: ['valorizado'] });
+      qc.refetchQueries({ queryKey: ['pos-products'] });
       reset();
       onClose();
     },
@@ -162,8 +163,8 @@ export default function InventarioPage() {
   });
 
   const products = productsData?.data ?? [];
-  const totalValorizado = valorizado?.totalValorizado ?? 0;
-  const criticos = products.filter((p) => Number(p.stockActual) <= Number(p.stockMinimo)).length;
+  const totalValorizado = valorizado?.totales?.totalCosto ?? 0;
+  const criticos = products.filter((p) => Number(p.stockMinimo) > 0 && Number(p.stockActual) <= Number(p.stockMinimo)).length;
 
   return (
     <div className="space-y-5">

@@ -111,11 +111,19 @@ export interface Customer {
   nombreCompleto:  string;
   tipoDocumento:   string;
   numeroDocumento: string;
+  razonSocial?:    string;
   telefono?:       string;
   email?:          string;
   direccion?:      string;
+  distrito?:       string;
+  departamento?:   string;
+  provincia?:      string;
+  ubigeo?:         string;
+  referencia?:     string;
+  nota?:           string;
   creditoUsado:    number;
   creditoLimite:   number;
+  isActive:        boolean;
 }
 
 // ─── Suppliers ───────────────────────────────────────────────────────────────

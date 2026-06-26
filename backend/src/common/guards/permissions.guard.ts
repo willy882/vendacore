@@ -18,8 +18,8 @@ export class PermissionsGuard implements CanActivate {
 
     if (!user) throw new ForbiddenException('Sin autenticación');
 
-    // El rol 'administrador' tiene acceso total
-    if (user.role?.name === 'administrador') return true;
+    // super_admin y administrador tienen acceso total
+    if (user.role?.name === 'super_admin' || user.role?.name === 'administrador') return true;
 
     const userPermissions: { module: string; action: string }[] =
       user.role?.permissions?.map((rp: any) => rp.permission) ?? [];

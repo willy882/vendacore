@@ -4,8 +4,10 @@ import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { Eye, EyeOff, Lock, Mail } from 'lucide-react';
+import { Link } from 'react-router-dom';
 import { authService } from '@/services/auth.service';
 import { useAuthStore } from '@/stores/auth.store';
+import { queryClient } from '@/lib/queryClient';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 
@@ -32,6 +34,7 @@ export default function LoginPage() {
     setServerError(null);
     try {
       const res = await authService.login(data.email, data.password);
+      queryClient.clear();
       setAuth(res.user, res.accessToken, res.refreshToken);
       navigate('/', { replace: true });
     } catch (err: any) {
@@ -43,14 +46,14 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-stone-900 via-amber-950 to-stone-900 flex items-center justify-center p-4">
+    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-blue-950 flex items-center justify-center p-4">
       <div className="w-full max-w-md">
-        {/* Logo */}
+        {/* Branding */}
         <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-32 h-32 rounded-2xl bg-white shadow-lg mb-2 p-2">
-            <img src="/logo.png" alt="Ozzo Coffee" className="w-full h-full object-contain" />
+          <div className="inline-flex items-center justify-center w-32 h-32 rounded-2xl shadow-lg mb-2 p-2" style={{background:'#0d1117'}}>
+            <img src="/wcode.png" alt="WCode" className="w-full h-full object-contain" />
           </div>
-          <p className="text-amber-300/70 text-sm mt-1">Sistema de Gestión</p>
+          <p className="text-blue-300/70 text-sm mt-1">Sistema de Gestión</p>
         </div>
 
         {/* Card */}
@@ -103,10 +106,23 @@ export default function LoginPage() {
               Ingresar
             </Button>
           </form>
+
+          <div className="mt-4 text-center">
+            <Link to="/forgot-password" className="text-sm text-slate-400 hover:text-blue-600 transition-colors">
+              ¿Olvidaste tu contraseña?
+            </Link>
+          </div>
         </div>
 
-        <p className="text-center text-stone-500 text-xs mt-6">
-          Ozzo Coffee © {new Date().getFullYear()}
+        <p className="text-center text-sm text-slate-500 mt-4">
+          ¿No tienes cuenta?{' '}
+          <Link to="/register" className="text-blue-600 hover:underline font-medium">
+            Regístrate aquí
+          </Link>
+        </p>
+
+        <p className="text-center text-slate-500 text-xs mt-4">
+          VendaCore © {new Date().getFullYear()} · by <span className="text-blue-400 font-medium">WCode</span>
         </p>
       </div>
     </div>

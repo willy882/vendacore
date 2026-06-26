@@ -1,6 +1,6 @@
 import {
   IsArray, IsEnum, IsNotEmpty, IsNumber, IsOptional,
-  IsString, IsUUID, Min, ValidateNested, ArrayMinSize,
+  IsString, IsUUID, MaxLength, Min, ValidateNested, ArrayMinSize,
   IsBoolean,
 } from 'class-validator';
 import { Type } from 'class-transformer';
@@ -11,8 +11,11 @@ export enum TipoVenta {
 }
 
 export class SaleItemDto {
-  @IsUUID()
-  productId: string;
+  @IsUUID() @IsOptional()
+  productId?: string;
+
+  @IsString() @MaxLength(255) @IsOptional()
+  descripcion?: string;
 
   @IsNumber({ maxDecimalPlaces: 4 }) @Min(0.0001) @Type(() => Number)
   cantidad: number;

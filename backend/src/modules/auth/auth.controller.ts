@@ -6,24 +6,31 @@ import {
   HttpCode,
   HttpStatus,
   Get,
+  UseGuards,
 } from '@nestjs/common';
 import type { Request } from 'express';
+import { AuthGuard } from '@nestjs/passport';
+import { Throttle } from '@nestjs/throttler';
 import { AuthService } from './auth.service';
 import { LoginDto } from './dto/login.dto';
-import { RefreshTokenDto } from './dto/refresh-token.dto';
+import { RegisterDto } from './dto/register.dto';
 import { Public } from '../../common/decorators/public.decorator';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
-import { UseGuards } from '@nestjs/common';
 
 @Controller('auth')
 export class AuthController {
   constructor(private authService: AuthService) {}
 
-  /**
-   * POST /api/v1/auth/login
-   * Inicio de sesión con email y contraseña
-   */
+  @Public()
+  @Post('register')
+  @HttpCode(HttpStatus.CREATED)
+  async register(@Body() dto: RegisterDto) {
+    return this.authService.register(dto);
+  }
+
+  // Máx 10 intentos por minuto por IP — bloqueo de brute-force
+  @Throttle({ default: { limit: 10, ttl: 60000 } })
   @Public()
   @Post('login')
   @HttpCode(HttpStatus.OK)
@@ -32,24 +39,15 @@ export class AuthController {
     return this.authService.login(dto, ip);
   }
 
-  /**
-   * POST /api/v1/auth/refresh
-   * Renovar access token usando refresh token
-   */
+  // El guard verifica firma del refresh token y tokenVersion antes de renovar
   @Public()
+  @UseGuards(AuthGuard('jwt-refresh'))
   @Post('refresh')
   @HttpCode(HttpStatus.OK)
-  async refresh(@Body() dto: RefreshTokenDto) {
-    // Decodificamos el refresh token para obtener el userId
-    // La validación completa la hace JwtRefreshStrategy en producción
-    // Por simplicidad aquí usamos el guard directamente
-    return this.authService.refreshTokens(dto.refreshToken);
+  async refresh(@Req() req: Request) {
+    return this.authService.refreshTokens((req as any).user.id);
   }
 
-  /**
-   * POST /api/v1/auth/logout
-   * Cierre de sesión (invalida el token en auditoría)
-   */
   @UseGuards(JwtAuthGuard)
   @Post('logout')
   @HttpCode(HttpStatus.OK)
@@ -58,13 +56,25 @@ export class AuthController {
     return this.authService.logout(user.id, ip);
   }
 
-  /**
-   * GET /api/v1/auth/me
-   * Perfil del usuario autenticado
-   */
   @UseGuards(JwtAuthGuard)
   @Get('me')
   async getProfile(@CurrentUser() user: any) {
     return this.authService.getProfile(user.id);
+  }
+
+  // Máx 5 solicitudes por minuto — evita enumeración de correos
+  @Throttle({ default: { limit: 5, ttl: 60000 } })
+  @Public()
+  @Post('forgot-password')
+  @HttpCode(HttpStatus.OK)
+  async forgotPassword(@Body() body: { email: string }) {
+    return this.authService.forgotPassword(body.email);
+  }
+
+  @Public()
+  @Post('reset-password')
+  @HttpCode(HttpStatus.OK)
+  async resetPassword(@Body() body: { token: string; password: string }) {
+    return this.authService.resetPassword(body.token, body.password);
   }
 }

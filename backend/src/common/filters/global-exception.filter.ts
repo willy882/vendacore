@@ -36,6 +36,34 @@ export class GlobalExceptionFilter implements ExceptionFilter {
           message = 'Error de validación';
         }
       }
+    } else if (
+      exception instanceof Error &&
+      'code' in exception &&
+      typeof (exception as any).code === 'string' &&
+      /^P\d{4}$/.test((exception as any).code)
+    ) {
+      // Errores conocidos de Prisma → respuestas HTTP legibles
+      const prismaErr = exception as Error & { code: string };
+      switch (prismaErr.code) {
+        case 'P2002':
+          status  = HttpStatus.CONFLICT;
+          message = 'Ya existe un registro con ese valor. Verifica los campos únicos.';
+          break;
+        case 'P2025':
+          status  = HttpStatus.NOT_FOUND;
+          message = 'El registro solicitado no existe.';
+          break;
+        case 'P2003':
+          status  = HttpStatus.BAD_REQUEST;
+          message = 'Referencia inválida: el registro relacionado no existe.';
+          break;
+        case 'P2034':
+          status  = HttpStatus.CONFLICT;
+          message = 'Conflicto de concurrencia. Intente la operación nuevamente.';
+          break;
+        default:
+          this.logger.error(`Prisma error ${prismaErr.code}: ${prismaErr.message}`);
+      }
     } else if (exception instanceof Error) {
       this.logger.error(
         `Error no controlado: ${exception.message}`,

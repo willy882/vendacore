@@ -12,6 +12,20 @@ export class BusinessService {
     return biz;
   }
 
+  async getSubscription(businessId: string) {
+    const sub = await this.prisma.businessSubscription.findUnique({
+      where: { businessId },
+      include: { plan: { select: { nombre: true, precio: true, duracionDias: true } } },
+    });
+    if (!sub) return null;
+    const now = new Date();
+    const fechaFin = sub.fechaFin ? new Date(sub.fechaFin) : null;
+    const daysLeft = fechaFin
+      ? Math.ceil((fechaFin.getTime() - now.getTime()) / (1000 * 60 * 60 * 24))
+      : null;
+    return { ...sub, daysLeft };
+  }
+
   async update(businessId: string, dto: UpdateBusinessDto) {
     await this.findOne(businessId);
     return this.prisma.business.update({

@@ -4,6 +4,7 @@ import {
   Post,
   Put,
   Patch,
+  Delete,
   Param,
   Body,
   UseGuards,
@@ -47,18 +48,38 @@ export class UsersController {
     );
   }
 
+  /** GET /api/v1/users/all — Lista todos los usuarios de todos los negocios (solo super_admin) */
+  @Roles('super_admin')
+  @Get('all')
+  findAllGlobal() {
+    return this.usersService.findAllGlobal();
+  }
+
   /** GET /api/v1/users — Lista todos los usuarios del negocio */
-  @Roles('administrador', 'supervisor')
+  @Roles('administrador', 'supervisor', 'super_admin')
   @Get()
   findAll(@CurrentUser() user: any) {
+    if (user.role?.name === 'super_admin') {
+      return this.usersService.findAllGlobal();
+    }
     return this.usersService.findAll(user.businessId);
   }
 
   /** GET /api/v1/users/roles — Lista todos los roles disponibles */
-  @Roles('administrador')
+  @Roles('administrador', 'super_admin')
   @Get('roles')
   findRoles() {
     return this.usersService.findRoles();
+  }
+
+  /** POST /api/v1/users/in-business/:businessId — Crear usuario en negocio específico (super_admin) */
+  @Roles('super_admin')
+  @Post('in-business/:businessId')
+  createInBusiness(
+    @Param('businessId', ParseUUIDPipe) businessId: string,
+    @Body() dto: CreateUserDto,
+  ) {
+    return this.usersService.create(dto, businessId);
   }
 
   /** GET /api/v1/users/:id — Detalle de un usuario */
@@ -76,14 +97,14 @@ export class UsersController {
   }
 
   /** PUT /api/v1/users/:id — Actualizar usuario */
-  @Roles('administrador')
+  @Roles('administrador', 'super_admin')
   @Put(':id')
   update(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateUserDto,
     @CurrentUser() user: any,
   ) {
-    return this.usersService.update(id, dto, user.businessId);
+    return this.usersService.update(id, dto, user.role?.name === 'super_admin' ? null : user.businessId);
   }
 
   /** PATCH /api/v1/users/:id/deactivate — Desactivar usuario (eliminación lógica) */
@@ -91,5 +112,12 @@ export class UsersController {
   @Patch(':id/deactivate')
   deactivate(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: any) {
     return this.usersService.deactivate(id, user.businessId);
+  }
+
+  /** DELETE /api/v1/users/:id — Eliminar usuario permanentemente */
+  @Roles('administrador')
+  @Delete(':id')
+  deleteUser(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: any) {
+    return this.usersService.deleteUser(id, user.businessId);
   }
 }

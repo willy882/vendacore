@@ -39,6 +39,16 @@ export class InventoryController {
   }
 
   /**
+   * GET /api/v1/inventory/kardex
+   * Historial global de movimientos (todos los productos)
+   */
+  @Roles('administrador', 'supervisor', 'almacenero', 'contabilidad')
+  @Get('kardex')
+  getGlobalKardex(@Query() query: any, @CurrentUser() user: any) {
+    return this.service.getGlobalKardex(query, user.businessId);
+  }
+
+  /**
    * GET /api/v1/inventory/:productId/kardex
    * Historial de movimientos de un producto
    */

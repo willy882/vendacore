@@ -2,16 +2,16 @@ import { useState, useCallback, useRef, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Search, Plus, Minus, Trash2, ShoppingCart,
-  User, CreditCard, CheckCircle, X, Package, ScanLine, Printer,
+  User, CreditCard, CheckCircle, X, Package, ScanLine, Printer, UserPlus, MessageCircle,
 } from 'lucide-react';
 import { BrowserMultiFormatReader } from '@zxing/browser';
 import { productsService } from '@/services/products.service';
 import { salesService } from '@/services/sales.service';
 import { customersService } from '@/services/customers.service';
 import { cashService } from '@/services/cash.service';
+import api from '@/lib/api';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
-import { Select } from '@/components/ui/Select';
 import { Badge } from '@/components/ui/Badge';
 import { Modal } from '@/components/ui/Modal';
 import { Spinner } from '@/components/ui/Spinner';
@@ -21,10 +21,12 @@ import type { Product, Customer } from '@/types';
 // ─── Tipos internos ───────────────────────────────────────────────────────────
 
 interface CartItem {
-  product:       Product;
-  cantidad:      number;
+  product:        Product;
+  cantidad:       number;
   precioUnitario: number;
-  descuento:     number;
+  descuento:      number;      // discount percentage
+  nota?:          string;      // observation per item
+  esGratuito?:    boolean;     // free/courtesy item
 }
 
 interface PaymentLine {
@@ -36,7 +38,7 @@ interface PaymentLine {
 interface SaleReceipt {
   id:        string;
   fecha:     Date;
-  customer:  { nombreCompleto: string } | null;
+  customer:  { nombreCompleto: string; telefono?: string; numeroDocumento?: string; tipoDocumento?: string } | null;
   items:     CartItem[];
   subtotal:  number;
   igv:       number;
@@ -81,191 +83,480 @@ function ProductCard({ product, onAdd }: { product: Product; onAdd: (p: Product)
   );
 }
 
+// ─── Modal editar ítem del carrito ───────────────────────────────────────────
+
+function CartItemEditModal({ item, idx, onSave, onRemove, onClose }: {
+  item:     CartItem | null;
+  idx:      number;
+  onSave:   (idx: number, changes: Partial<CartItem>) => void;
+  onRemove: (idx: number) => void;
+  onClose:  () => void;
+}) {
+  const [cantidad,   setCantidad]   = useState(1);
+  const [precio,     setPrecio]     = useState('');
+  const [descuento,  setDescuento]  = useState('0');
+  const [nota,       setNota]       = useState('');
+  const [esGratuito, setEsGratuito] = useState(false);
+
+  useEffect(() => {
+    if (item) {
+      setCantidad(item.cantidad);
+      setPrecio(item.precioUnitario.toFixed(2));
+      setDescuento(String(item.descuento ?? 0));
+      setNota(item.nota ?? '');
+      setEsGratuito(item.esGratuito ?? false);
+    }
+  }, [item]);
+
+  if (!item) return null;
+
+  const precioNum   = parseFloat(precio) || 0;
+  const descNum     = parseFloat(descuento) || 0;
+  const subtotal    = esGratuito ? 0 : cantidad * precioNum * (1 - descNum / 100);
+
+  const handleSave = () => {
+    onSave(idx, {
+      cantidad,
+      precioUnitario: esGratuito ? 0 : precioNum,
+      descuento:      descNum,
+      nota:           nota.trim() || undefined,
+      esGratuito,
+    });
+    onClose();
+  };
+
+  return (
+    <Modal open={!!item} onClose={onClose} title={item.product.nombre} size="sm"
+      footer={
+        <div className="flex gap-2 w-full">
+          <Button variant="outline" onClick={() => { onRemove(idx); onClose(); }}
+            className="text-red-600 border-red-200 hover:bg-red-50">
+            Eliminar
+          </Button>
+          <Button onClick={handleSave} fullWidth icon={<CheckCircle size={15} />}>
+            Guardar
+          </Button>
+        </div>
+      }
+    >
+      <div className="space-y-3">
+        {/* Cantidad */}
+        <div>
+          <p className="text-xs text-slate-500 mb-1">Cantidad</p>
+          <div className="flex items-center gap-3">
+            <button onClick={() => setCantidad((v) => Math.max(1, v - 1))}
+              className="w-9 h-9 rounded-lg bg-slate-100 hover:bg-slate-200 flex items-center justify-center text-slate-700">
+              <Minus size={14} />
+            </button>
+            <input
+              type="number" min="1"
+              value={cantidad}
+              onChange={(e) => setCantidad(Math.max(1, parseInt(e.target.value) || 1))}
+              className="w-20 text-center text-lg font-bold border border-slate-300 rounded-lg py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+            <button onClick={() => setCantidad((v) => v + 1)}
+              className="w-9 h-9 rounded-lg bg-blue-100 hover:bg-blue-200 flex items-center justify-center text-blue-700">
+              <Plus size={14} />
+            </button>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          {/* Precio */}
+          <div>
+            <p className="text-xs text-slate-500 mb-1">Precio S/</p>
+            <input
+              type="number" step="0.01" min="0"
+              value={precio}
+              onChange={(e) => setPrecio(e.target.value)}
+              disabled={esGratuito}
+              className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-slate-100 disabled:text-slate-400"
+            />
+          </div>
+          {/* Descuento % */}
+          <div>
+            <p className="text-xs text-slate-500 mb-1">Descuento %</p>
+            <input
+              type="number" step="1" min="0" max="100"
+              value={descuento}
+              onChange={(e) => setDescuento(e.target.value)}
+              disabled={esGratuito}
+              className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-slate-100 disabled:text-slate-400"
+            />
+          </div>
+        </div>
+
+        {/* Es cortesía */}
+        <label className="flex items-center gap-3 cursor-pointer p-2.5 rounded-lg border border-slate-200 hover:bg-slate-50">
+          <input
+            type="checkbox"
+            checked={esGratuito}
+            onChange={(e) => { setEsGratuito(e.target.checked); if (e.target.checked) { setDescuento('0'); } }}
+            className="w-4 h-4 rounded accent-blue-600"
+          />
+          <div>
+            <p className="text-sm font-medium text-slate-700">Es cortesía / gratuito</p>
+            <p className="text-xs text-slate-400">El precio se establece en S/ 0.00</p>
+          </div>
+        </label>
+
+        {/* Observación */}
+        <div>
+          <p className="text-xs text-slate-500 mb-1">Observación (opcional)</p>
+          <input
+            value={nota}
+            onChange={(e) => setNota(e.target.value)}
+            placeholder="Ej: sin cebolla, bien cocido..."
+            className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+          />
+        </div>
+
+        {/* Subtotal */}
+        <div className="flex justify-between items-center pt-2 border-t border-slate-100">
+          <span className="text-sm text-slate-500">Subtotal</span>
+          <span className={`text-lg font-bold ${esGratuito ? 'text-emerald-600' : 'text-blue-700'}`}>
+            {esGratuito ? 'CORTESÍA' : formatCurrency(subtotal)}
+          </span>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 // ─── Modal de confirmación de pago ───────────────────────────────────────────
 
 interface PayModalProps {
-  open:           boolean;
-  onClose:        () => void;
-  total:          number;
-  cart:           CartItem[];
-  paymentMethods: { id: string; nombre: string }[];
-  onConfirm:      (payments: PaymentLine[], tipoVenta: 'contado' | 'credito') => void;
-  loading:        boolean;
+  open:             boolean;
+  onClose:          () => void;
+  total:            number;
+  cart:             CartItem[];
+  paymentMethods:   { id: string; nombre: string }[];
+  onConfirm:        (payments: PaymentLine[], tipoVenta: 'contado' | 'credito', tipoDoc: 'nota' | 'boleta' | 'factura') => void;
+  loading:          boolean;
+  customer:         Customer | null;
+  onCustomerChange: (c: Customer | null) => void;
 }
 
-function PayModal({ open, onClose, total, cart, paymentMethods, onConfirm, loading }: PayModalProps) {
-  const [tipoVenta, setTipoVenta] = useState<'contado' | 'credito'>('contado');
-  const [payments, setPayments]   = useState<PaymentLine[]>([]);
-  const initializedRef = useRef(false);
+// Iconos/colores para métodos de pago
+const METHOD_STYLES: Record<string, { bg: string; text: string; emoji: string }> = {
+  efectivo:       { bg: 'bg-green-100',  text: 'text-green-700',  emoji: '💵' },
+  yape:           { bg: 'bg-purple-100', text: 'text-purple-700', emoji: '💜' },
+  plin:           { bg: 'bg-sky-100',    text: 'text-sky-700',    emoji: '🔵' },
+  transferencia:  { bg: 'bg-amber-100',  text: 'text-amber-700',  emoji: '🏦' },
+  tarjeta:        { bg: 'bg-blue-100',   text: 'text-blue-700',   emoji: '💳' },
+  tarjeta_debito: { bg: 'bg-blue-100',   text: 'text-blue-700',   emoji: '💳' },
+  tarjeta_credito:{ bg: 'bg-indigo-100', text: 'text-indigo-700', emoji: '💳' },
+};
+function getMethodStyle(nombre: string) {
+  const key = nombre.toLowerCase().replace(/[^a-z_]/g, '');
+  return METHOD_STYLES[key] ?? { bg: 'bg-slate-100', text: 'text-slate-700', emoji: '💰' };
+}
 
-  // Inicializar pagos UNA SOLA VEZ cuando el modal abre (o cuando llegan los métodos por primera vez)
+function PayModal({ open, onClose, total, cart, paymentMethods, onConfirm, loading, customer, onCustomerChange }: PayModalProps) {
+  const qc = useQueryClient();
+
+  // ── Tipo de documento ──────────────────────────────────────────────────────
+  const [tipoDoc, setTipoDoc] = useState<'nota' | 'boleta' | 'factura'>('nota');
+
+  // ── Tipo de venta ──────────────────────────────────────────────────────────
+  const [tipoVenta, setTipoVenta] = useState<'contado' | 'credito'>('contado');
+
+  // ── Montos por método ──────────────────────────────────────────────────────
+  const [amounts, setAmounts] = useState<Record<string, string>>({});
+
+  // ── Sección cliente ────────────────────────────────────────────────────────
+  const [docSearch,  setDocSearch]  = useState('');
+  const [newNombre,  setNewNombre]  = useState('');
+  const [showCreate, setShowCreate] = useState(false);
+
+  const trimDoc    = docSearch.trim();
+  const onlyDigits = /^\d+$/.test(trimDoc);
+  const isDni      = onlyDigits && trimDoc.length === 8;
+  const isRuc      = onlyDigits && trimDoc.length === 11;
+  const tipoDocId  = isDni ? 'DNI' : isRuc ? 'RUC' : undefined;
+
+  const { data: searchData, isFetching: searchFetching } = useQuery({
+    queryKey: ['customers-paysearch', trimDoc],
+    queryFn:  () => customersService.getAll({ search: trimDoc, limit: 5 }),
+    enabled:  open && trimDoc.length >= 3,
+    staleTime: 30_000,
+  });
+
+  const searchResults: Customer[] = (Array.isArray(searchData) ? searchData : (searchData as any)?.data) ?? [];
+
   useEffect(() => {
-    if (!open) { initializedRef.current = false; setPayments([]); return; }
-    if (initializedRef.current) return;
+    if (tipoDocId && searchResults.length === 1 && searchResults[0].numeroDocumento === trimDoc) {
+      onCustomerChange(searchResults[0]);
+      setDocSearch('');
+      setShowCreate(false);
+    }
+  }, [searchResults, tipoDocId, trimDoc]);
+
+  useEffect(() => {
+    if (tipoDocId && !searchFetching && searchResults.length === 0 && trimDoc.length >= 8) {
+      setShowCreate(true);
+    } else if (searchResults.length > 0) {
+      setShowCreate(false);
+    }
+  }, [searchResults, searchFetching, tipoDocId, trimDoc]);
+
+  const createCustomerMut = useMutation({
+    mutationFn: () => customersService.create({
+      nombreCompleto:  newNombre.trim(),
+      tipoDocumento:   tipoDocId ?? 'DNI',
+      numeroDocumento: trimDoc,
+    }),
+    onSuccess: (c) => {
+      qc.invalidateQueries({ queryKey: ['customers'] });
+      onCustomerChange(c);
+      setDocSearch('');
+      setNewNombre('');
+      setShowCreate(false);
+    },
+  });
+
+  // ── Inicializar montos ────────────────────────────────────────────────────
+  useEffect(() => {
+    if (!open) {
+      setAmounts({});
+      setDocSearch('');
+      setNewNombre('');
+      setShowCreate(false);
+      setTipoVenta('contado');
+      setTipoDoc('nota');
+      return;
+    }
     if (paymentMethods.length > 0) {
-      initializedRef.current = true;
-      const m = paymentMethods[0];
-      setPayments([{ methodId: m.id, nombre: m.nombre, monto: total.toFixed(2) }]);
+      const init: Record<string, string> = {};
+      paymentMethods.forEach((m) => { init[m.id] = ''; });
+      init[paymentMethods[0].id] = total.toFixed(2);
+      setAmounts(init);
     }
   }, [open, paymentMethods]);
 
-  const addLine = () => {
-    if (paymentMethods.length === 0) return;
-    const m = paymentMethods[0];
-    setPayments((p) => [...p, { methodId: m.id, nombre: m.nombre, monto: '' }]);
-  };
-
-  const updateLine = (i: number, field: keyof PaymentLine, value: string) => {
-    setPayments((prev) => {
-      const copy = [...prev];
-      if (field === 'methodId') {
-        const m = paymentMethods.find((m) => m.id === value);
-        copy[i] = { ...copy[i], methodId: value, nombre: m?.nombre ?? '' };
-      } else {
-        (copy[i] as any)[field] = value;
-      }
-      return copy;
-    });
-  };
-
-  const removeLine = (i: number) => setPayments((p) => p.filter((_, idx) => idx !== i));
-
-  const totalPagado = payments.reduce((a, p) => a + (parseFloat(p.monto) || 0), 0);
+  const totalPagado = Object.values(amounts).reduce((a, v) => a + (parseFloat(v) || 0), 0);
   const vuelto      = totalPagado - total;
-  const canPay      = tipoVenta === 'credito' || (payments.length > 0 && totalPagado >= total);
+  const canPay      = tipoVenta === 'credito' || totalPagado >= total - 0.001;
 
-  const methodOptions = paymentMethods.map((m) => ({ value: m.id, label: m.nombre }));
+  const setAmt = (id: string, v: string) => setAmounts((p) => ({ ...p, [id]: v }));
+
+  // Botón "Exacto" — llena el primer método con el total
+  const setExacto = () => {
+    if (paymentMethods.length === 0) return;
+    const init: Record<string, string> = {};
+    paymentMethods.forEach((m) => { init[m.id] = ''; });
+    init[paymentMethods[0].id] = total.toFixed(2);
+    setAmounts(init);
+  };
+
+  const handleConfirm = () => {
+    const payments: PaymentLine[] = paymentMethods
+      .filter((m) => parseFloat(amounts[m.id] || '0') > 0)
+      .map((m) => ({ methodId: m.id, nombre: m.nombre, monto: amounts[m.id] || '0' }));
+    onConfirm(payments, tipoVenta, tipoDoc);
+  };
 
   return (
     <Modal
       open={open}
       onClose={onClose}
-      title="Procesar Pago"
+      title="Procesar Venta"
       size="lg"
       footer={
         <>
           <Button variant="outline" onClick={onClose}>Cancelar</Button>
-          <Button onClick={() => canPay && onConfirm(payments, tipoVenta)} loading={loading} disabled={!canPay} icon={<CheckCircle size={16} />}>
+          <Button
+            onClick={handleConfirm}
+            loading={loading}
+            disabled={!canPay}
+            icon={<CheckCircle size={16} />}
+          >
             Confirmar Venta
           </Button>
         </>
       }
     >
-      <div className="flex gap-5">
-        {/* Columna izquierda: productos */}
-        <div className="flex-1 min-w-0">
-          <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">Productos</p>
-          <div className="space-y-1 max-h-48 overflow-y-auto">
-            {cart.map((item) => (
-              <div key={item.product.id} className="flex justify-between items-center text-sm py-1 border-b border-slate-100 last:border-0">
-                <div className="flex-1 min-w-0">
-                  <p className="font-medium text-slate-800 truncate">{item.product.nombre}</p>
-                  <p className="text-xs text-slate-400">{formatCurrency(item.precioUnitario)} × {item.cantidad}</p>
-                </div>
-                <span className="font-semibold text-slate-700 ml-2">
-                  {formatCurrency(item.cantidad * item.precioUnitario)}
-                </span>
+      <div className="space-y-4">
+
+        {/* ── TIPO DOCUMENTO ── */}
+        <div className="flex gap-1 p-1 bg-slate-100 rounded-xl">
+          {(['nota', 'boleta', 'factura'] as const).map((t) => (
+            <button
+              key={t}
+              onClick={() => setTipoDoc(t)}
+              className={`flex-1 py-2 rounded-lg text-sm font-semibold capitalize transition-all ${
+                tipoDoc === t
+                  ? 'bg-white shadow text-blue-700'
+                  : 'text-slate-500 hover:text-slate-700'
+              }`}
+            >
+              {t === 'nota' ? '📋 Nota' : t === 'boleta' ? '🧾 Boleta' : '📄 Factura'}
+            </button>
+          ))}
+        </div>
+
+        {/* ── CLIENTE ── */}
+        <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 space-y-2">
+          <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide flex items-center gap-1">
+            <User size={12} /> Cliente
+            {tipoDoc === 'nota' && <span className="font-normal normal-case text-slate-400 ml-1">— opcional para nota</span>}
+            {tipoDoc === 'boleta' && <span className="font-normal normal-case text-slate-400 ml-1">— DNI o Consumidor Final</span>}
+            {tipoDoc === 'factura' && <span className="font-normal normal-case text-amber-600 ml-1">— RUC obligatorio</span>}
+          </p>
+
+          {customer && !docSearch ? (
+            <div className="flex items-center gap-2 px-3 py-2 bg-blue-50 border border-blue-200 rounded-lg">
+              <User size={14} className="text-blue-500 shrink-0" />
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-semibold text-slate-800 truncate">{customer.nombreCompleto}</p>
+                <p className="text-xs text-slate-500">
+                  {(customer as any).tipoDocumento && `${(customer as any).tipoDocumento}: ${(customer as any).numeroDocumento}`}
+                  {(customer as any).telefono && ` · ${(customer as any).telefono}`}
+                </p>
               </div>
-            ))}
-          </div>
-          <div className="mt-3 pt-3 border-t border-slate-200">
-            <div className="flex justify-between text-base font-bold text-slate-800">
+              <button onClick={() => onCustomerChange(null)} className="text-slate-400 hover:text-red-500 p-1">
+                <X size={14} />
+              </button>
+            </div>
+          ) : (
+            <div className="relative">
+              <input
+                value={docSearch}
+                onChange={(e) => { setDocSearch(e.target.value); setShowCreate(false); setNewNombre(''); }}
+                placeholder="DNI (8), RUC (11) o nombre del cliente..."
+                className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 pr-24"
+              />
+              {tipoDocId && (
+                <span className="absolute right-2 top-1/2 -translate-y-1/2 text-xs font-bold text-blue-700 bg-blue-100 px-2 py-1 rounded-md">
+                  {tipoDocId} ✓
+                </span>
+              )}
+              {searchFetching && (
+                <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-slate-400 animate-pulse">buscando...</span>
+              )}
+            </div>
+          )}
+
+          {!customer && trimDoc.length >= 3 && searchResults.length > 0 && (
+            <div className="border border-slate-200 bg-white rounded-lg overflow-hidden max-h-28 overflow-y-auto">
+              {searchResults.map((c) => (
+                <button key={c.id} onClick={() => { onCustomerChange(c); setDocSearch(''); }}
+                  className="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-blue-50 border-b border-slate-100 last:border-0 text-left">
+                  <User size={13} className="text-slate-400 shrink-0" />
+                  <div>
+                    <p className="font-medium text-slate-800">{c.nombreCompleto}</p>
+                    <p className="text-xs text-slate-400">{(c as any).tipoDocumento}: {(c as any).numeroDocumento}</p>
+                  </div>
+                </button>
+              ))}
+            </div>
+          )}
+
+          {showCreate && !customer && (
+            <div className="bg-white border border-amber-200 rounded-lg p-3 space-y-2">
+              <p className="text-xs text-amber-700 font-medium">⚠ No encontrado — ingresa el nombre para crear:</p>
+              <input
+                autoFocus value={newNombre} onChange={(e) => setNewNombre(e.target.value)}
+                placeholder="Nombre completo del cliente"
+                className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                onKeyDown={(e) => { if (e.key === 'Enter' && newNombre.trim()) createCustomerMut.mutate(); }}
+              />
+              <button
+                onClick={() => createCustomerMut.mutate()}
+                disabled={!newNombre.trim() || createCustomerMut.isPending}
+                className="w-full py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 font-medium"
+              >
+                {createCustomerMut.isPending ? 'Creando...' : `Crear — ${tipoDocId} ${trimDoc}`}
+              </button>
+            </div>
+          )}
+        </div>
+
+        {/* ── PRODUCTOS + PAGO ── */}
+        <div className="flex gap-4">
+          {/* Productos */}
+          <div className="flex-1 min-w-0">
+            <div className="space-y-1 max-h-32 overflow-y-auto">
+              {cart.map((item) => (
+                <div key={item.product.id} className="flex justify-between items-center text-sm py-1 border-b border-slate-100 last:border-0">
+                  <div className="flex-1 min-w-0">
+                    <p className="font-medium text-slate-800 truncate">{item.product.nombre}</p>
+                    <p className="text-xs text-slate-400">
+                      {formatCurrency(item.precioUnitario)} × {item.cantidad}
+                      {item.descuento > 0 && <span className="ml-1 text-orange-500">-{item.descuento}%</span>}
+                      {item.esGratuito && <span className="ml-1 text-emerald-600 font-semibold">CORTESÍA</span>}
+                    </p>
+                    {item.nota && <p className="text-xs text-slate-400 italic">{item.nota}</p>}
+                  </div>
+                  <span className="font-semibold text-slate-700 ml-2">
+                    {item.esGratuito ? 'S/ 0.00' : formatCurrency(item.cantidad * item.precioUnitario * (1 - (item.descuento ?? 0) / 100))}
+                  </span>
+                </div>
+              ))}
+            </div>
+            <div className="mt-2 pt-2 border-t border-slate-200 flex justify-between font-bold text-slate-800">
               <span>Total</span>
               <span className="text-blue-700">{formatCurrency(total)}</span>
             </div>
           </div>
-        </div>
 
-        {/* Columna derecha: pago */}
-        <div className="w-56 flex-shrink-0 space-y-3">
-          <div className="flex gap-2">
-            <button
-              onClick={() => { setTipoVenta('contado'); }}
-              className={`flex-1 py-2 rounded-lg border text-xs font-medium transition-colors ${
-                tipoVenta === 'contado' ? 'bg-blue-600 border-blue-600 text-white' : 'border-slate-300 text-slate-600 hover:bg-slate-50'
-              }`}
-            >
-              Contado
-            </button>
-            <button
-              onClick={() => setTipoVenta('credito')}
-              className={`flex-1 py-2 rounded-lg border text-xs font-medium transition-colors ${
-                tipoVenta === 'credito' ? 'bg-blue-600 border-blue-600 text-white' : 'border-slate-300 text-slate-600 hover:bg-slate-50'
-              }`}
-            >
-              Crédito
-            </button>
-          </div>
-
-          {tipoVenta === 'contado' && (
-            <>
-              <div className="space-y-2">
-                {payments.map((p, i) => (
-                  <div key={i} className="space-y-1">
-                    <div className="flex gap-1 items-center">
-                      <Select
-                        options={methodOptions}
-                        value={p.methodId}
-                        onChange={(e) => updateLine(i, 'methodId', e.target.value)}
-                        className="flex-1 text-xs"
-                      />
-                      <button onClick={() => removeLine(i)} className="p-1.5 text-slate-400 hover:text-red-500">
-                        <X size={14} />
-                      </button>
-                    </div>
-                    <Input
-                      type="number" step="0.01" min="0"
-                      placeholder="Monto S/"
-                      value={p.monto}
-                      onChange={(e) => updateLine(i, 'monto', e.target.value)}
-                    />
-                    {/* Info de pago según método */}
-                    {p.nombre.toLowerCase() === 'yape' && (
-                      <div className="rounded-lg overflow-hidden border border-purple-200 bg-purple-50 p-2 flex flex-col items-center gap-1">
-                        <img src="/yape-qr.png" alt="QR Yape" className="w-full max-w-xs object-contain rounded" />
-                        <p className="text-xs text-purple-700 font-medium">Escanea para pagar con Yape</p>
-                      </div>
-                    )}
-                    {p.nombre.toLowerCase() === 'plin' && (
-                      <div className="rounded-lg border border-sky-200 bg-sky-50 p-3 text-center">
-                        <p className="text-xs text-sky-600 mb-0.5">Número Plin</p>
-                        <p className="text-lg font-bold text-sky-700 tracking-widest">928 141 669</p>
-                        <p className="text-xs text-sky-500">Envía el monto exacto</p>
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
-
-              {totalPagado < total && (
-                <button
-                  onClick={addLine}
-                  className="w-full text-xs py-1.5 border border-dashed border-slate-300 rounded-lg text-slate-500 hover:border-blue-400 hover:text-blue-600 flex items-center justify-center gap-1"
-                >
-                  <Plus size={12} /> Agregar método de pago
+          {/* Pago */}
+          <div className="w-56 flex-shrink-0 space-y-2">
+            {/* Contado / Crédito */}
+            <div className="flex gap-1">
+              {(['contado', 'credito'] as const).map((t) => (
+                <button key={t} onClick={() => setTipoVenta(t)}
+                  className={`flex-1 py-1.5 rounded-lg border text-xs font-medium capitalize transition-colors ${
+                    tipoVenta === t ? 'bg-blue-600 border-blue-600 text-white' : 'border-slate-300 text-slate-600 hover:bg-slate-50'
+                  }`}>
+                  {t}
                 </button>
-              )}
+              ))}
+            </div>
 
-              {payments.length > 0 && (
-                <div className="pt-2 space-y-1 text-xs">
-                  <div className="flex justify-between text-slate-600">
-                    <span>Recibido:</span>
-                    <span className="font-medium">{formatCurrency(totalPagado)}</span>
-                  </div>
-                  <div className={`flex justify-between font-semibold ${vuelto >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>
+            {tipoVenta === 'contado' && (
+              <>
+                <div className="space-y-1.5">
+                  {paymentMethods.map((m) => {
+                    const style = getMethodStyle(m.nombre);
+                    return (
+                      <div key={m.id} className="flex items-center gap-2">
+                        <div className={`w-7 h-7 rounded-lg flex items-center justify-center text-sm ${style.bg} flex-shrink-0`}>
+                          {style.emoji}
+                        </div>
+                        <span className={`text-xs font-medium flex-1 truncate ${style.text}`}>{m.nombre}</span>
+                        <input
+                          type="number" step="0.01" min="0"
+                          placeholder="0.00"
+                          value={amounts[m.id] ?? ''}
+                          onChange={(e) => setAmt(m.id, e.target.value)}
+                          className="w-20 px-2 py-1 text-xs border border-slate-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500 text-right"
+                        />
+                      </div>
+                    );
+                  })}
+                </div>
+
+                <button onClick={setExacto}
+                  className="w-full text-xs py-1.5 border border-dashed border-slate-300 rounded-lg text-slate-500 hover:border-blue-400 hover:text-blue-600 transition-colors">
+                  Exacto ({formatCurrency(total)})
+                </button>
+
+                {totalPagado > 0 && (
+                  <div className={`flex justify-between text-xs font-semibold px-2 py-1.5 rounded-lg ${vuelto >= 0 ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-600'}`}>
                     <span>{vuelto >= 0 ? 'Vuelto:' : 'Faltante:'}</span>
                     <span>{formatCurrency(Math.abs(vuelto))}</span>
                   </div>
-                </div>
-              )}
-            </>
-          )}
+                )}
+              </>
+            )}
 
-          {tipoVenta === 'credito' && (
-            <div className="rounded-lg bg-amber-50 border border-amber-200 p-3 text-xs text-amber-800">
-              La venta quedará pendiente de cobro en el crédito del cliente.
-            </div>
-          )}
+            {tipoVenta === 'credito' && (
+              <div className="rounded-lg bg-amber-50 border border-amber-200 p-3 text-xs text-amber-800">
+                La venta quedará pendiente de cobro en el crédito del cliente.
+              </div>
+            )}
+          </div>
         </div>
       </div>
     </Modal>
@@ -277,48 +568,149 @@ function PayModal({ open, onClose, total, cart, paymentMethods, onConfirm, loadi
 function CustomerModal({ open, onClose, onSelect }: {
   open: boolean; onClose: () => void; onSelect: (c: Customer | null) => void;
 }) {
-  const [search, setSearch] = useState('');
+  const qc = useQueryClient();
+  const [search, setSearch]       = useState('');
+  const [showCreate, setShowCreate] = useState(false);
+  const [newNombre, setNewNombre] = useState('');
+
+  // Detectar si el input parece DNI (8 dígitos) o RUC (11 dígitos)
+  const trimmed    = search.trim();
+  const onlyDigits = /^\d+$/.test(trimmed);
+  const isDni      = onlyDigits && trimmed.length === 8;
+  const isRuc      = onlyDigits && trimmed.length === 11;
+  const tipoDoc    = isDni ? 'DNI' : isRuc ? 'RUC' : undefined;
+
   const { data, isLoading } = useQuery({
     queryKey: ['customers-search', search],
     queryFn:  () => customersService.getAll({ search, limit: 20 }),
     enabled:  open,
   });
 
+  const createMut = useMutation({
+    mutationFn: () => customersService.create({
+      nombreCompleto:  newNombre.trim(),
+      tipoDocumento:   tipoDoc ?? 'DNI',
+      numeroDocumento: trimmed,
+    }),
+    onSuccess: (customer) => {
+      qc.invalidateQueries({ queryKey: ['customers'] });
+      onSelect(customer);
+      onClose();
+    },
+  });
+
+  const customers: Customer[] = (Array.isArray(data) ? data : (data as any)?.data) ?? [];
+  const noResults = !isLoading && trimmed && customers.length === 0;
+
+  // Resetear al abrir/cerrar
+  useEffect(() => {
+    if (!open) { setSearch(''); setShowCreate(false); setNewNombre(''); }
+  }, [open]);
+
   return (
     <Modal open={open} onClose={onClose} title="Seleccionar Cliente" size="md">
       <div className="space-y-3">
         <Input
-          placeholder="Buscar por nombre o documento..."
+          placeholder="Nombre, DNI (8 dígitos) o RUC (11 dígitos)..."
           icon={<Search size={15} />}
           value={search}
-          onChange={(e) => setSearch(e.target.value)}
+          onChange={(e) => { setSearch(e.target.value); setShowCreate(false); setNewNombre(''); }}
           autoFocus
         />
+
+        {/* Badge DNI/RUC detectado */}
+        {tipoDoc && (
+          <div className="flex items-center gap-2 px-3 py-1.5 bg-blue-50 border border-blue-200 rounded-lg text-xs text-blue-700">
+            🔍 Buscando por <strong>{tipoDoc}</strong>: {trimmed}
+          </div>
+        )}
+
+        {/* Consumidor final */}
         <button
           onClick={() => { onSelect(null); onClose(); }}
           className="w-full text-left px-3 py-2.5 rounded-lg border border-slate-200 hover:bg-slate-50 text-sm text-slate-600 flex items-center gap-2"
         >
           <User size={15} className="text-slate-400" />
-          Consumidor Final
+          Consumidor Final <span className="text-xs text-slate-400 ml-auto">sin identificación</span>
         </button>
 
         {isLoading ? (
           <div className="flex justify-center py-6"><Spinner /></div>
         ) : (
-          <div className="space-y-1 max-h-64 overflow-y-auto">
-            {data?.data.map((c) => (
+          <div className="space-y-1 max-h-48 overflow-y-auto">
+            {customers.map((c) => (
               <button
                 key={c.id}
                 onClick={() => { onSelect(c); onClose(); }}
                 className="w-full text-left px-3 py-2.5 rounded-lg hover:bg-blue-50 border border-transparent hover:border-blue-200 transition-colors"
               >
                 <p className="text-sm font-medium text-slate-800">{c.nombreCompleto}</p>
-                <p className="text-xs text-slate-500">{c.tipoDocumento}: {c.numeroDocumento}</p>
+                <p className="text-xs text-slate-500">{c.tipoDocumento}: {c.numeroDocumento} {c.telefono ? `· ${c.telefono}` : ''}</p>
               </button>
             ))}
-            {data?.data.length === 0 && (
-              <p className="text-sm text-slate-400 text-center py-4">Sin resultados</p>
+          </div>
+        )}
+
+        {/* Sin resultados → ofrecer crear */}
+        {noResults && !showCreate && (
+          <button
+            onClick={() => setShowCreate(true)}
+            className="w-full flex items-center justify-center gap-2 py-2.5 text-sm text-blue-600 border border-blue-200 border-dashed rounded-lg hover:bg-blue-50 transition-colors"
+          >
+            <UserPlus size={15} />
+            {tipoDoc ? `Crear cliente con ${tipoDoc} ${trimmed}` : `Crear "${trimmed}"`}
+          </button>
+        )}
+
+        {/* Formulario rápido de creación */}
+        {showCreate && (
+          <div className="border border-blue-200 rounded-xl p-3 space-y-3 bg-blue-50/50">
+            <p className="text-xs font-semibold text-slate-700 flex items-center gap-1">
+              <UserPlus size={13} /> Nuevo cliente
+            </p>
+            {tipoDoc && (
+              <div className="grid grid-cols-2 gap-2 text-xs">
+                <div className="bg-white border border-slate-200 rounded-lg px-3 py-2">
+                  <p className="text-slate-400 mb-0.5">Tipo</p>
+                  <p className="font-semibold text-slate-700">{tipoDoc}</p>
+                </div>
+                <div className="bg-white border border-slate-200 rounded-lg px-3 py-2">
+                  <p className="text-slate-400 mb-0.5">Número</p>
+                  <p className="font-mono font-semibold text-slate-700">{trimmed}</p>
+                </div>
+              </div>
             )}
+            <div>
+              <p className="text-xs text-slate-600 mb-1">Nombre completo *</p>
+              <input
+                autoFocus
+                value={newNombre}
+                onChange={(e) => setNewNombre(e.target.value)}
+                placeholder="Ej: Juan Pérez García"
+                className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                onKeyDown={(e) => { if (e.key === 'Enter' && newNombre.trim() && !createMut.isPending) createMut.mutate(); }}
+              />
+            </div>
+            {createMut.isError && (
+              <p className="text-xs text-red-600 bg-red-50 px-2 py-1 rounded">
+                {(createMut.error as any)?.response?.data?.message ?? 'Error al crear cliente'}
+              </p>
+            )}
+            <div className="flex gap-2">
+              <button
+                onClick={() => { setShowCreate(false); setNewNombre(''); }}
+                className="flex-1 py-2 text-xs text-slate-600 border border-slate-300 rounded-lg hover:bg-white"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={() => createMut.mutate()}
+                disabled={!newNombre.trim() || createMut.isPending}
+                className="flex-1 py-2 text-xs text-white bg-blue-600 rounded-lg hover:bg-blue-700 disabled:opacity-50"
+              >
+                {createMut.isPending ? 'Creando...' : 'Crear y seleccionar'}
+              </button>
+            </div>
           </div>
         )}
       </div>
@@ -330,6 +722,62 @@ function CustomerModal({ open, onClose, onSelect }: {
 
 function ReceiptModal({ receipt, onClose }: { receipt: SaleReceipt | null; onClose: () => void }) {
   const printRef = useRef<HTMLDivElement>(null);
+  const [waPhone, setWaPhone]   = useState('');
+  const [showWa, setShowWa]     = useState(false);
+  const [waSending, setWaSending] = useState(false);
+  const { data: biz } = useQuery({
+    queryKey: ['business-me'],
+    queryFn: () => api.get('/business/me').then((r) => r.data),
+    staleTime: 60 * 60 * 1000,
+  });
+  const businessName = biz?.nombreComercial ?? biz?.razonSocial ?? 'Mi Negocio';
+
+  // Pre-llenar teléfono del cliente cuando se abre
+  useEffect(() => {
+    if (receipt) {
+      setWaPhone((receipt.customer as any)?.telefono ?? '');
+      setShowWa(false);
+    }
+  }, [receipt?.id]);
+
+  const handleSendWhatsApp = async () => {
+    if (!printRef.current || waSending) return;
+    setWaSending(true);
+    try {
+      const html2canvas = (await import('html2canvas')).default;
+      const canvas = await html2canvas(printRef.current, {
+        backgroundColor: '#ffffff',
+        scale: 2,
+        useCORS: true,
+        logging: false,
+      });
+      const blob = await new Promise<Blob>((res) => canvas.toBlob((b) => res(b!), 'image/png'));
+      const file = new File([blob], `comprobante-${receipt!.id.slice(-8)}.png`, { type: 'image/png' });
+
+      // Web Share API con archivo (funciona en móvil)
+      if (navigator.canShare?.({ files: [file] })) {
+        await navigator.share({
+          files: [file],
+          title: `Comprobante ${businessName}`,
+          text: `Comprobante de venta — Total: S/ ${receipt!.total.toFixed(2)}`,
+        });
+      } else {
+        // Fallback: descarga la imagen y abre WhatsApp con texto
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url; a.download = file.name; a.click();
+        URL.revokeObjectURL(url);
+        if (waPhone.length === 9) {
+          const text = encodeURIComponent(`Hola, adjunto tu comprobante de *${businessName}* por S/ ${receipt!.total.toFixed(2)} 🧾`);
+          window.open(`https://wa.me/51${waPhone}?text=${text}`, '_blank');
+        }
+      }
+    } catch (e: any) {
+      if (e?.name !== 'AbortError') console.error(e);
+    } finally {
+      setWaSending(false);
+    }
+  };
 
   const handlePrint = () => {
     const content = printRef.current;
@@ -367,15 +815,42 @@ function ReceiptModal({ receipt, onClose }: { receipt: SaleReceipt | null; onClo
       title="Comprobante de Venta"
       size="sm"
       footer={
-        <div className="flex gap-2 w-full">
-          <Button variant="outline" onClick={onClose} fullWidth>Nueva venta</Button>
-          <Button icon={<Printer size={15} />} onClick={handlePrint} fullWidth>Imprimir</Button>
+        <div className="flex flex-col gap-2 w-full">
+          {showWa && (
+            <div className="flex gap-2 items-center bg-green-50 border border-green-200 rounded-lg px-3 py-2">
+              <MessageCircle size={15} className="text-green-600 shrink-0" />
+              <input
+                value={waPhone}
+                onChange={(e) => setWaPhone(e.target.value.replace(/\D/g, '').slice(0, 9))}
+                placeholder="Celular destino (opcional)"
+                className="flex-1 bg-transparent text-sm focus:outline-none"
+                maxLength={9}
+              />
+              <button
+                onClick={handleSendWhatsApp}
+                disabled={waSending}
+                className="px-3 py-1.5 text-xs bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 font-medium whitespace-nowrap"
+              >
+                {waSending ? 'Generando...' : 'Enviar comprobante'}
+              </button>
+            </div>
+          )}
+          <div className="flex gap-2">
+            <Button variant="outline" onClick={onClose} fullWidth>Nueva venta</Button>
+            <button
+              onClick={() => setShowWa((v) => !v)}
+              className={`flex items-center gap-1.5 px-3 py-2 rounded-lg border text-sm font-medium transition-colors ${showWa ? 'bg-green-600 border-green-600 text-white' : 'border-green-500 text-green-600 hover:bg-green-50'}`}
+            >
+              <MessageCircle size={15} /> WhatsApp
+            </button>
+            <Button icon={<Printer size={15} />} onClick={handlePrint} fullWidth>Imprimir</Button>
+          </div>
         </div>
       }
     >
       {/* Área imprimible */}
       <div ref={printRef} className="font-mono text-xs text-slate-800 space-y-1">
-        <p className="title text-center font-bold text-sm">OZZO COFFEE</p>
+        <p className="title text-center font-bold text-sm">{businessName.toUpperCase()}</p>
         <p className="text-center text-slate-500">Comprobante de Venta</p>
         <div className="border-t border-dashed border-slate-300 my-2" />
 
@@ -588,6 +1063,7 @@ export default function VentasPage() {
   const [scanModal, setScanModal]   = useState(false);
   const [receipt, setReceipt] = useState<SaleReceipt | null>(null);
   const [scanError, setScanError]   = useState<string | null>(null);
+  const [editIdx, setEditIdx]     = useState<number>(-1);
 
   // Queries
   const { data: products, isLoading: loadingProducts } = useQuery({
@@ -645,6 +1121,7 @@ export default function VentasPage() {
       setPayModal(false);
       qc.invalidateQueries({ queryKey: ['products'] });
       qc.invalidateQueries({ queryKey: ['dashboard'] });
+      qc.invalidateQueries({ queryKey: ['sales'] });
     },
     onError: (error: any) => {
       const msg = error?.response?.data?.message;
@@ -665,7 +1142,7 @@ export default function VentasPage() {
         };
         return copy;
       }
-      return [...prev, { product, cantidad: 1, precioUnitario: Number(product.precioVenta), descuento: 0 }];
+      return [...prev, { product, cantidad: 1, precioUnitario: Number(product.precioVenta), descuento: 0, nota: undefined, esGratuito: false }];
     });
   }, []);
 
@@ -684,6 +1161,14 @@ export default function VentasPage() {
   const removeItem = (idx: number) => setCart((p) => p.filter((_, i) => i !== idx));
   const clearCart  = () => { setCart([]); setCustomer(null); };
 
+  const updateCartItem = (idx: number, changes: Partial<CartItem>) => {
+    setCart((prev) => {
+      const copy = [...prev];
+      copy[idx] = { ...copy[idx], ...changes };
+      return copy;
+    });
+  };
+
   // Totales
   const subtotalSinIgv = cart.reduce((a, i) => {
     const sub = i.cantidad * i.precioUnitario * (1 - i.descuento / 100);
@@ -695,7 +1180,7 @@ export default function VentasPage() {
   }, 0);
   const total = cart.reduce((a, i) => a + i.cantidad * i.precioUnitario * (1 - i.descuento / 100), 0);
 
-  const handleConfirmPay = (payments: PaymentLine[], tipoVenta: 'contado' | 'credito') => {
+  const handleConfirmPay = (payments: PaymentLine[], tipoVenta: 'contado' | 'credito', _tipoDoc: 'nota' | 'boleta' | 'factura') => {
     createMut.mutate({
       customerId:    customer?.id,
       cashSessionId: activeSession?.id,
@@ -736,11 +1221,6 @@ export default function VentasPage() {
     }
   }, [products, addToCart]);
 
-  const catOptions = [
-    { value: '', label: 'Todas' },
-    ...(categories ?? []).map((c) => ({ value: c.id, label: c.nombre })),
-  ];
-
   return (
     <div className="flex gap-4 h-[calc(100vh-8rem)]">
       {/* ── Columna izquierda: productos ──────────────────────────────── */}
@@ -761,12 +1241,29 @@ export default function VentasPage() {
           >
             <ScanLine size={18} />
           </button>
-          <Select
-            options={catOptions}
-            value={catFilter}
-            onChange={(e) => setCatFilter(e.target.value)}
-            className="w-40"
-          />
+        </div>
+
+        {/* Categorías */}
+        <div className="flex flex-wrap gap-1.5">
+          <button
+            onClick={() => setCatFilter('')}
+            className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition-all ${
+              catFilter === '' ? 'bg-blue-600 text-white border-blue-600 shadow-sm' : 'bg-white text-slate-600 border-slate-300 hover:border-blue-400 hover:text-blue-600'
+            }`}
+          >
+            Todos
+          </button>
+          {(categories ?? []).map((cat) => (
+            <button
+              key={cat.id}
+              onClick={() => setCatFilter(cat.id)}
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition-all ${
+                catFilter === cat.id ? 'bg-blue-600 text-white border-blue-600 shadow-sm' : 'bg-white text-slate-600 border-slate-300 hover:border-blue-400 hover:text-blue-600'
+              }`}
+            >
+              {cat.nombre}
+            </button>
+          ))}
         </div>
         {scanError && (
           <div className="text-xs text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
@@ -829,13 +1326,16 @@ export default function VentasPage() {
             </div>
           ) : (
             cart.map((item, idx) => (
-              <div key={item.product.id} className="flex gap-2 p-2 rounded-lg bg-slate-50 border border-slate-100">
-                <div className="flex-1 min-w-0">
+              <div key={item.product.id} className="flex gap-2 p-2 rounded-lg bg-slate-50 border border-slate-100 hover:border-blue-200 hover:bg-blue-50/40 transition-colors">
+                <button className="flex-1 min-w-0 text-left" onClick={() => setEditIdx(idx)}>
                   <p className="text-xs font-medium text-slate-800 line-clamp-2">{item.product.nombre}</p>
                   <p className="text-xs text-blue-600 font-semibold mt-0.5">
                     {formatCurrency(item.precioUnitario)}
+                    {item.descuento > 0 && <span className="ml-1 text-orange-500 font-normal">-{item.descuento}%</span>}
+                    {item.esGratuito && <span className="ml-1 text-emerald-600 font-bold">CORTESÍA</span>}
                   </p>
-                </div>
+                  {item.nota && <p className="text-xs text-slate-400 italic truncate">{item.nota}</p>}
+                </button>
                 <div className="flex flex-col items-end gap-1">
                   <button onClick={() => removeItem(idx)} className="text-slate-300 hover:text-red-400">
                     <Trash2 size={12} />
@@ -897,6 +1397,16 @@ export default function VentasPage() {
         paymentMethods={payMethods ?? []}
         onConfirm={handleConfirmPay}
         loading={createMut.isPending}
+        customer={customer}
+        onCustomerChange={setCustomer}
+      />
+
+      <CartItemEditModal
+        item={editIdx >= 0 ? cart[editIdx] : null}
+        idx={editIdx}
+        onSave={updateCartItem}
+        onRemove={removeItem}
+        onClose={() => setEditIdx(-1)}
       />
 
       <CustomerModal

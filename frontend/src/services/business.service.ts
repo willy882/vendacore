@@ -9,6 +9,7 @@ export interface BusinessInfo {
   telefono?: string;
   email?: string;
   logoUrl?: string;
+  nubefactRuta?: string;
   nubefactToken?: string;
   sunatMode?: string;
 }

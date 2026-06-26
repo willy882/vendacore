@@ -105,7 +105,64 @@ async function main() {
   });
   console.log(`   ✅ ${admin.email} / Admin123!`);
 
-  // 5. Métodos de pago por defecto
+  // 4b. Crear rol y usuario super_admin
+  console.log('\n🔑 Creando super_admin...');
+  const superRole = await prisma.role.upsert({
+    where: { name: 'super_admin' },
+    update: {},
+    create: { name: 'super_admin', description: 'Super Administrador del sistema VendaCore' },
+  });
+
+  const superHash = await bcrypt.hash('SuperAdmin2024!', 12);
+  const superAdmin = await prisma.user.upsert({
+    where: { email: 'willy@vendacore.app' },
+    update: {},
+    create: {
+      email: 'willy@vendacore.app',
+      passwordHash: superHash,
+      nombre: 'Willy',
+      apellido: 'VendaCore',
+      businessId: business.id,
+      roleId: superRole.id,
+      isActive: true,
+    },
+  });
+  console.log(`   ✅ ${superAdmin.email} / SuperAdmin2024!`);
+
+  // 5. Planes de suscripción + activar negocio demo
+  console.log('\n📋 Configurando planes y suscripción del negocio demo...');
+  const db = prisma as any; // cast necesario hasta que VSCode refresque los tipos generados
+  const planDefs = [
+    { nombre: 'Básico',       descripcion: 'Hasta 3 usuarios, 200 productos',        precio: 99,  duracionDias: 30 },
+    { nombre: 'Profesional',  descripcion: 'Hasta 8 usuarios, productos ilimitados',  precio: 199, duracionDias: 30 },
+    { nombre: 'Empresarial',  descripcion: 'Usuarios ilimitados, soporte prioritario', precio: 399, duracionDias: 30 },
+  ];
+  let basicPlan: any = null;
+  for (const p of planDefs) {
+    const plan = await db.plan.upsert({ where: { nombre: p.nombre }, update: {}, create: p });
+    if (p.nombre === 'Básico') basicPlan = plan;
+  }
+  console.log(`   ✅ 3 planes creados`);
+
+  const now = new Date();
+  const yearFromNow = new Date(now);
+  yearFromNow.setFullYear(yearFromNow.getFullYear() + 1);
+
+  await prisma.business.update({ where: { id: business.id }, data: { status: 'activo' } as any });
+  await db.businessSubscription.upsert({
+    where: { businessId: business.id },
+    update: {},
+    create: {
+      businessId: business.id,
+      planId: basicPlan.id,
+      estado: 'activo',
+      fechaInicio: now,
+      fechaFin: yearFromNow,
+    },
+  });
+  console.log(`   ✅ Suscripción Básico activada (válida 1 año)`);
+
+  // 6. Métodos de pago por defecto
   console.log('\n💳 Creando métodos de pago...');
   const methods = [
     { nombre: 'Efectivo',           tipo: 'efectivo' },

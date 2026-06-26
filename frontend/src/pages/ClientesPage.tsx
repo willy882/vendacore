@@ -1,266 +1,601 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useForm } from 'react-hook-form';
-import { zodResolver } from '@hookform/resolvers/zod';
-import { z } from 'zod';
-import { Plus, Search, Pencil, Trash2, ChevronLeft, ChevronRight, Users, History } from 'lucide-react';
+import {
+  UserPlus, FileSpreadsheet, Pencil, ChevronLeft, ChevronRight,
+  Users, CheckCircle2, XCircle, Search, X, Save, Trash2, Loader2,
+} from 'lucide-react';
 import { customersService } from '@/services/customers.service';
-import { Card } from '@/components/ui/Card';
-import { Button } from '@/components/ui/Button';
-import { Input } from '@/components/ui/Input';
-import { Select } from '@/components/ui/Select';
-import { Badge } from '@/components/ui/Badge';
-import { Modal } from '@/components/ui/Modal';
+import { Button }  from '@/components/ui/Button';
 import { Spinner } from '@/components/ui/Spinner';
-import { formatCurrency, formatDate } from '@/lib/utils';
 import type { Customer } from '@/types';
-import { useAuthStore } from '@/stores/auth.store';
-import { useFormPersist } from '@/hooks/useFormPersist';
 
-const schema = z.object({
-  nombreCompleto:  z.string().min(2, 'Requerido'),
-  tipoDocumento:   z.enum(['DNI', 'RUC', 'CE', 'PASAPORTE']),
-  numeroDocumento: z.string().min(8, 'Mínimo 8 caracteres').max(15),
-  telefono:        z.string().optional(),
-  email:           z.string().email('Email inválido').optional().or(z.literal('')),
-  direccion:       z.string().optional(),
-  limiteCredito:   z.string().optional(),
-});
-type FormData = z.infer<typeof schema>;
+// ── Field component ───────────────────────────────────────────────────────────
 
-function CustomerModal({ open, onClose, customer }: { open: boolean; onClose: () => void; customer?: Customer | null }) {
-  const qc = useQueryClient();
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="relative rounded-xl border border-slate-200 bg-slate-50/60 px-3 pt-5 pb-2.5
+      transition-all duration-200
+      focus-within:border-blue-400 focus-within:bg-white
+      focus-within:shadow-[0_0_0_3px_rgba(59,130,246,0.10)]">
+      <span className="absolute top-1.5 left-3 text-[9px] font-bold text-slate-400 uppercase tracking-widest">
+        {label}
+      </span>
+      {children}
+    </div>
+  );
+}
+
+function Section({ label }: { label: string }) {
+  return (
+    <div className="flex items-center gap-3 pt-1">
+      <span className="text-[9px] font-extrabold tracking-widest text-slate-400 uppercase whitespace-nowrap">
+        {label}
+      </span>
+      <div className="h-px bg-slate-100 flex-1" />
+    </div>
+  );
+}
+
+const inputCls = 'w-full outline-none text-sm text-slate-800 bg-transparent placeholder:text-slate-300';
+
+// ── Modal nuevo / editar cliente ──────────────────────────────────────────────
+
+function CustomerModal({
+  open, onClose, customer,
+}: { open: boolean; onClose: () => void; customer?: Customer | null }) {
+  const qc     = useQueryClient();
   const isEdit = !!customer;
-  const { register, handleSubmit, reset, watch, formState: { errors, isSubmitting } } = useForm<FormData>({
-    resolver: zodResolver(schema),
-    defaultValues: { tipoDocumento: 'DNI' as const },
-  });
-  const { clearPersisted } = useFormPersist('clientes', watch, reset, open, isEdit);
 
-  // Cada vez que se abre el modal, poblar (o limpiar) el formulario
+  const [isActive,     setIsActive]     = useState(true);
+  const [tipoDoc,      setTipoDoc]      = useState<'DNI'|'RUC'>('DNI');
+  const [numDoc,       setNumDoc]       = useState('');
+  const [nombre,       setNombre]       = useState('');
+  const [sede,         setSede]         = useState('');
+  const [telefono,     setTelefono]     = useState('');
+  const [correo,       setCorreo]       = useState('');
+  const [departamento, setDepartamento] = useState('');
+  const [provincia,    setProvincia]    = useState('');
+  const [distrito,     setDistrito]     = useState('');
+  const [ubigeo,       setUbigeo]       = useState('');
+  const [direccion,    setDireccion]    = useState('');
+  const [referencia,   setReferencia]   = useState('');
+  const [nota,         setNota]         = useState('');
+  const [lookupLoading, setLookupLoading] = useState(false);
+  const [lookupMsg,     setLookupMsg]     = useState('');
+  const [saving,       setSaving]       = useState(false);
+  const [apiErr,       setApiErr]       = useState('');
+
+  const numDocRef = useRef<HTMLInputElement>(null);
+
   useEffect(() => {
-    if (open) {
-      reset(customer ? {
-        nombreCompleto:  customer.nombreCompleto,
-        tipoDocumento:   customer.tipoDocumento as any,
-        numeroDocumento: customer.numeroDocumento,
-        telefono:        customer.telefono ?? '',
-        email:           customer.email ?? '',
-        direccion:       customer.direccion ?? '',
-        limiteCredito:   String(customer.creditoLimite ?? 0),
-      } : {
-        nombreCompleto: '', tipoDocumento: 'DNI', numeroDocumento: '',
-        telefono: '', email: '', direccion: '', limiteCredito: '',
-      });
+    if (!open) return;
+    if (customer) {
+      setIsActive(customer.isActive);
+      setTipoDoc((customer.tipoDocumento as 'DNI'|'RUC') ?? 'DNI');
+      setNumDoc(customer.numeroDocumento ?? '');
+      setNombre(customer.nombreCompleto ?? '');
+      setSede(customer.razonSocial ?? '');
+      setTelefono(customer.telefono ?? '');
+      setCorreo(customer.email ?? '');
+      setDepartamento(customer.departamento ?? '');
+      setProvincia(customer.provincia ?? '');
+      setDistrito(customer.distrito ?? '');
+      setUbigeo(customer.ubigeo ?? '');
+      setDireccion(customer.direccion ?? '');
+      setReferencia(customer.referencia ?? '');
+      setNota(customer.nota ?? '');
+    } else {
+      setIsActive(true); setTipoDoc('DNI'); setNumDoc(''); setNombre('');
+      setSede(''); setTelefono(''); setCorreo(''); setDepartamento('');
+      setProvincia(''); setDistrito(''); setUbigeo(''); setDireccion('');
+      setReferencia(''); setNota('');
     }
+    setLookupMsg(''); setApiErr('');
+    setTimeout(() => numDocRef.current?.focus(), 100);
   }, [open, customer]);
 
-  const saveMut = useMutation({
-    mutationFn: (data: FormData) => {
-      const { limiteCredito, ...rest } = data;
-      const payload = { ...rest, creditoLimite: limiteCredito ? parseFloat(limiteCredito) : undefined };
-      return isEdit ? customersService.update(customer!.id, payload) : customersService.create(payload);
-    },
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['customers'] }); clearPersisted(); reset(); onClose(); },
-  });
+  const buscarDocumento = async () => {
+    const num = numDoc.trim();
+    if (!num) return;
+    setLookupLoading(true);
+    setLookupMsg('');
+    try {
+      const data = await customersService.lookup(tipoDoc, num);
+      setNombre(data.nombreCompleto ?? '');
+      if (data.razonSocial)    setSede(data.razonSocial);
+      if (data.departamento)   setDepartamento(data.departamento);
+      if (data.provincia)      setProvincia(data.provincia);
+      if (data.distrito)       setDistrito(data.distrito);
+      if (data.ubigeo)         setUbigeo(data.ubigeo);
+      if (data.direccion)      setDireccion(data.direccion);
+      const src = data.source === 'local' ? 'Encontrado en sistema' : data.source === 'reniec' ? '✓ RENIEC' : '✓ SUNAT';
+      setLookupMsg(src);
+    } catch (e: any) {
+      const msg = e?.response?.data?.message ?? 'No encontrado';
+      setLookupMsg('✗ ' + (Array.isArray(msg) ? msg[0] : msg));
+    } finally {
+      setLookupLoading(false);
+    }
+  };
 
-  const err = (saveMut.error as any)?.response?.data?.message;
-
-  return (
-    <Modal open={open} onClose={() => { reset(); onClose(); }} title={isEdit ? 'Editar Cliente' : 'Nuevo Cliente'} size="md"
-      footer={<>
-        <Button variant="outline" onClick={() => { reset(); onClose(); }}>Cancelar</Button>
-        <Button loading={saveMut.isPending || isSubmitting} onClick={handleSubmit((d) => saveMut.mutate(d))}>
-          {isEdit ? 'Guardar' : 'Crear'}
-        </Button>
-      </>}
-    >
-      <div className="space-y-4">
-        {err && <div className="rounded-lg bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700">{Array.isArray(err) ? err.join(', ') : err}</div>}
-        <Input label="Nombre completo *" {...register('nombreCompleto')} error={errors.nombreCompleto?.message} />
-        <div className="grid grid-cols-2 gap-4">
-          <Select label="Tipo documento *" options={[
-            { value: 'DNI', label: 'DNI' }, { value: 'RUC', label: 'RUC' },
-            { value: 'CE', label: 'Carné Extranjería' }, { value: 'PASAPORTE', label: 'Pasaporte' },
-          ]} {...register('tipoDocumento')} error={errors.tipoDocumento?.message} />
-          <Input label="N° Documento *" {...register('numeroDocumento')} error={errors.numeroDocumento?.message} />
-        </div>
-        <div className="grid grid-cols-2 gap-4">
-          <Input label="Teléfono" {...register('telefono')} />
-          <Input label="Email" type="email" {...register('email')} error={errors.email?.message} />
-        </div>
-        <Input label="Dirección" {...register('direccion')} />
-        <Input label="Límite de crédito (S/)" type="number" step="0.01" min="0" {...register('limiteCredito')} />
-      </div>
-    </Modal>
-  );
-}
-
-function HistorialModal({ open, onClose, customer }: { open: boolean; onClose: () => void; customer: Customer | null }) {
-  const { data, isLoading } = useQuery({
-    queryKey: ['customer-historial', customer?.id],
-    queryFn:  () => customersService.getHistorial(customer!.id),
-    enabled:  open && !!customer,
-  });
-
-  return (
-    <Modal open={open} onClose={onClose} title={`Historial: ${customer?.nombreCompleto ?? ''}`} size="lg">
-      {isLoading ? <div className="flex justify-center py-8"><Spinner /></div> : (
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead><tr className="border-b">
-              <th className="text-left py-2 px-3 text-xs text-slate-500">Fecha</th>
-              <th className="text-right py-2 px-3 text-xs text-slate-500">Total</th>
-              <th className="text-center py-2 px-3 text-xs text-slate-500">Tipo</th>
-              <th className="text-center py-2 px-3 text-xs text-slate-500">Estado</th>
-            </tr></thead>
-            <tbody>
-              {data?.map((s: any) => (
-                <tr key={s.id} className="border-b hover:bg-slate-50">
-                  <td className="py-2 px-3 text-slate-600">{formatDate(s.fecha)}</td>
-                  <td className="py-2 px-3 text-right font-semibold">{formatCurrency(Number(s.total))}</td>
-                  <td className="py-2 px-3 text-center"><Badge variant="info">{s.tipoVenta}</Badge></td>
-                  <td className="py-2 px-3 text-center">
-                    <Badge variant={s.estado === 'activa' ? 'success' : 'danger'}>{s.estado}</Badge>
-                  </td>
-                </tr>
-              ))}
-              {!data?.length && <tr><td colSpan={4} className="text-center py-8 text-slate-400">Sin historial</td></tr>}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </Modal>
-  );
-}
-
-function DeleteModal({ customer, onClose }: { customer: Customer; onClose: () => void }) {
-  const qc = useQueryClient();
   const deleteMut = useMutation({
-    mutationFn: () => customersService.delete(customer.id),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['customers'] }); onClose(); },
+    mutationFn: () => customersService.delete(customer!.id),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['customers'] });
+      qc.invalidateQueries({ queryKey: ['customers-stats'] });
+      onClose();
+    },
   });
+
+  const handleSave = async () => {
+    if (!nombre.trim()) { setApiErr('El nombre es requerido'); return; }
+    setSaving(true); setApiErr('');
+    try {
+      const payload = {
+        nombreCompleto:  nombre.trim(),
+        tipoDocumento:   tipoDoc,
+        numeroDocumento: numDoc.trim() || undefined,
+        razonSocial:     sede.trim()         || undefined,
+        telefono:        telefono.trim()      || undefined,
+        email:           correo.trim()        || undefined,
+        departamento:    departamento.trim()  || undefined,
+        provincia:       provincia.trim()     || undefined,
+        distrito:        distrito.trim()      || undefined,
+        ubigeo:          ubigeo.trim()        || undefined,
+        direccion:       direccion.trim()     || undefined,
+        referencia:      referencia.trim()    || undefined,
+        nota:            nota.trim()          || undefined,
+      };
+      if (isEdit) {
+        await customersService.update(customer!.id, payload);
+      } else {
+        await customersService.create(payload);
+      }
+      qc.invalidateQueries({ queryKey: ['customers'] });
+      qc.invalidateQueries({ queryKey: ['customers-stats'] });
+      onClose();
+    } catch (e: any) {
+      const msg = e?.response?.data?.message ?? 'Error al guardar';
+      setApiErr(Array.isArray(msg) ? msg.join(', ') : msg);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (!open) return null;
+
+  const isLookupOk = lookupMsg && !lookupMsg.startsWith('✗');
+
   return (
-    <Modal open onClose={onClose} title="Eliminar Cliente">
-      <div className="space-y-4">
-        <p className="text-sm text-slate-700">
-          ¿Eliminar a <strong>{customer.nombreCompleto}</strong>? Esta acción no se puede deshacer.
-        </p>
-        {deleteMut.error && (
-          <p className="text-sm text-red-600 bg-red-50 border border-red-200 rounded px-3 py-2">
-            {(deleteMut.error as any)?.response?.data?.message ?? 'Error al eliminar'}
-          </p>
-        )}
-        <div className="flex justify-end gap-2">
-          <Button variant="ghost" onClick={onClose} disabled={deleteMut.isPending}>Cancelar</Button>
-          <Button variant="danger" onClick={() => deleteMut.mutate()} disabled={deleteMut.isPending}>
-            {deleteMut.isPending ? <Spinner size="sm" /> : <Trash2 size={15} />}
-            {deleteMut.isPending ? 'Eliminando...' : 'Eliminar'}
-          </Button>
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-4"
+      style={{ background: 'rgba(15,23,42,0.65)', backdropFilter: 'blur(6px)' }}
+    >
+      <div
+        className="bg-white rounded-3xl w-full max-w-lg overflow-hidden flex flex-col"
+        style={{ maxHeight: '92vh', boxShadow: '0 32px 80px -12px rgba(0,0,0,0.35)' }}
+      >
+
+        {/* ── Header ── */}
+        <div className="flex items-center gap-3 px-5 py-4 bg-gradient-to-r from-slate-900 to-slate-800 flex-shrink-0 rounded-t-3xl">
+          <button
+            onClick={onClose}
+            className="w-7 h-7 rounded-full flex items-center justify-center text-slate-400 hover:bg-white/10 hover:text-white transition-all duration-200"
+          >
+            <X size={15} strokeWidth={2.5} />
+          </button>
+
+          <button
+            onClick={() => setIsActive((v) => !v)}
+            className={`relative w-9 h-5 rounded-full transition-all duration-300 flex-shrink-0 ${isActive ? 'bg-emerald-500' : 'bg-slate-600'}`}
+          >
+            <span className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow-sm transition-transform duration-300 ${isActive ? 'translate-x-[18px]' : 'translate-x-0.5'}`} />
+          </button>
+          <span className={`text-xs font-bold tracking-widest flex-1 transition-colors duration-300 ${isActive ? 'text-emerald-400' : 'text-slate-500'}`}>
+            {isEdit ? (isActive ? 'ACTIVO' : 'INACTIVO') : 'NUEVO CLIENTE'}
+          </span>
+
+          {isEdit && (
+            <button
+              onClick={() => deleteMut.mutate()}
+              disabled={deleteMut.isPending}
+              className="w-7 h-7 rounded-full flex items-center justify-center text-red-400 hover:bg-red-500/20 hover:text-red-300 transition-all duration-200 disabled:opacity-40"
+            >
+              <Trash2 size={14} />
+            </button>
+          )}
+          <button
+            onClick={handleSave}
+            disabled={saving}
+            className="w-7 h-7 rounded-full flex items-center justify-center text-slate-300 hover:bg-white/10 hover:text-white transition-all duration-200 disabled:opacity-40"
+          >
+            {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
+          </button>
         </div>
+
+        {/* ── Body ── */}
+        <div className="flex-1 overflow-y-auto px-5 py-4 space-y-3">
+
+          {apiErr && (
+            <div className="rounded-xl bg-red-50 border border-red-200 px-4 py-2.5 text-sm text-red-700 font-medium">
+              {apiErr}
+            </div>
+          )}
+          {lookupMsg && (
+            <div className={`rounded-xl px-4 py-2.5 text-sm font-medium border ${
+              isLookupOk
+                ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                : 'bg-red-50 text-red-600 border-red-200'
+            }`}>
+              {lookupMsg}
+            </div>
+          )}
+
+          {/* ── Identificación ── */}
+          <Section label="Identificación" />
+
+          {/* Tipo doc: segmented control */}
+          <div className="flex rounded-xl overflow-hidden border border-slate-200 bg-slate-50 p-0.5 gap-0.5">
+            {(['DNI', 'RUC'] as const).map((t) => (
+              <button
+                key={t}
+                onClick={() => setTipoDoc(t)}
+                className={`flex-1 py-2 text-xs font-bold tracking-widest rounded-lg transition-all duration-200 ${
+                  tipoDoc === t
+                    ? 'bg-blue-500 text-white shadow-sm'
+                    : 'text-slate-400 hover:text-slate-600'
+                }`}
+              >
+                {t}
+              </button>
+            ))}
+          </div>
+
+          {/* Documento + lupa */}
+          <Field label="Número de documento">
+            <div className="flex items-center gap-2">
+              <input
+                ref={numDocRef}
+                value={numDoc}
+                onChange={(e) => setNumDoc(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && buscarDocumento()}
+                className={inputCls}
+                placeholder={tipoDoc === 'DNI' ? '8 dígitos' : '11 dígitos'}
+                maxLength={tipoDoc === 'DNI' ? 8 : 11}
+              />
+              <button
+                onClick={buscarDocumento}
+                disabled={lookupLoading || !numDoc.trim()}
+                title="Buscar en RENIEC / SUNAT"
+                className={`w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 transition-all duration-200
+                  ${numDoc.trim() && !lookupLoading
+                    ? 'bg-blue-500 text-white shadow-[0_4px_14px_rgba(59,130,246,0.4)] hover:bg-blue-600 hover:shadow-[0_6px_20px_rgba(59,130,246,0.5)] active:scale-95'
+                    : 'bg-slate-100 text-slate-300 cursor-not-allowed'
+                  }`}
+              >
+                {lookupLoading
+                  ? <Loader2 size={14} className="animate-spin" />
+                  : <Search size={14} />
+                }
+              </button>
+            </div>
+          </Field>
+
+          {/* Nombre */}
+          <Field label="Nombre / Razón social">
+            <input
+              value={nombre}
+              onChange={(e) => setNombre(e.target.value)}
+              className={inputCls}
+              placeholder="Apellidos y nombres o razón social"
+            />
+          </Field>
+
+          {/* ── Contacto ── */}
+          <Section label="Contacto" />
+
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Teléfono">
+              <input value={telefono} onChange={(e) => setTelefono(e.target.value)} className={inputCls} placeholder="999 999 999" />
+            </Field>
+            <Field label="Correo electrónico">
+              <input type="email" value={correo} onChange={(e) => setCorreo(e.target.value)} className={inputCls} placeholder="correo@ejemplo.com" />
+            </Field>
+          </div>
+
+          <Field label="Sede / Empresa">
+            <input value={sede} onChange={(e) => setSede(e.target.value)} className={inputCls} placeholder="PRINCIPAL" />
+          </Field>
+
+          {/* ── Ubicación ── */}
+          <Section label="Ubicación" />
+
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Departamento">
+              <input value={departamento} onChange={(e) => setDepartamento(e.target.value)} className={inputCls} />
+            </Field>
+            <Field label="Provincia">
+              <input value={provincia} onChange={(e) => setProvincia(e.target.value)} className={inputCls} />
+            </Field>
+          </div>
+
+          <div className="grid grid-cols-3 gap-3">
+            <div className="col-span-2">
+              <Field label="Distrito">
+                <input value={distrito} onChange={(e) => setDistrito(e.target.value)} className={inputCls} />
+              </Field>
+            </div>
+            <Field label="Ubigeo">
+              <input value={ubigeo} onChange={(e) => setUbigeo(e.target.value)} className={inputCls} />
+            </Field>
+          </div>
+
+          <Field label="Dirección">
+            <input value={direccion} onChange={(e) => setDireccion(e.target.value)} className={inputCls} placeholder="Av. / Jr. / Calle..." />
+          </Field>
+
+          {/* ── Adicional ── */}
+          <Section label="Adicional" />
+
+          <Field label="Referencia">
+            <input value={referencia} onChange={(e) => setReferencia(e.target.value)} className={inputCls} placeholder="Cerca a..." />
+          </Field>
+
+          <Field label="Nota interna">
+            <input value={nota} onChange={(e) => setNota(e.target.value)} className={inputCls} placeholder="Observaciones del cliente..." />
+          </Field>
+
+          <div className="pb-1" />
+        </div>
+
+        {/* ── Footer ── */}
+        <div className="flex border-t border-slate-100 flex-shrink-0 rounded-b-3xl overflow-hidden">
+          <button
+            onClick={onClose}
+            className="flex-1 py-4 text-sm font-semibold text-slate-400 hover:text-slate-600 hover:bg-slate-50 transition-all duration-200"
+          >
+            CANCELAR
+          </button>
+          <button
+            onClick={handleSave}
+            disabled={saving}
+            className="flex-1 py-4 text-sm font-bold text-white flex items-center justify-center gap-2
+              bg-gradient-to-r from-emerald-500 to-emerald-600
+              hover:from-emerald-600 hover:to-emerald-700
+              active:scale-[0.98] transition-all duration-150 disabled:opacity-60"
+          >
+            {saving ? <Loader2 size={15} className="animate-spin" /> : <Save size={15} />}
+            GUARDAR
+          </button>
+        </div>
+
       </div>
-    </Modal>
+    </div>
   );
 }
 
-const LIMIT = 20;
+// ── Helpers Excel ─────────────────────────────────────────────────────────────
+
+function exportCSV(customers: Customer[]) {
+  const today = new Date().toISOString().slice(0, 10);
+  const headers = [
+    'documento', 'tipodoc', 'nombre', 'telefono', 'correo',
+    'sede', 'departamento', 'provincia', 'distrito',
+    'ubigeo', 'direccion', 'referencia', 'nota',
+    'activo', 'latitud', 'longitud',
+  ];
+  const rows = customers.map((c) => [
+    c.numeroDocumento  ?? '',
+    c.tipoDocumento    ?? '',
+    c.nombreCompleto   ?? '',
+    c.telefono         ?? '',
+    c.email            ?? '',
+    c.razonSocial      ?? '',
+    c.departamento     ?? '',
+    c.provincia        ?? '',
+    c.distrito         ?? '',
+    c.ubigeo           ?? '',
+    c.direccion        ?? '',
+    c.referencia       ?? '',
+    c.nota             ?? '',
+    c.isActive ? 'true' : 'false',
+    '',                        // latitud
+    '',                        // longitud
+  ]);
+  const csv = [headers, ...rows]
+    .map((r) => r.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(','))
+    .join('\n');
+  const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  a.href     = url;
+  a.download = `CLIENTES_${today}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+// ── Page ──────────────────────────────────────────────────────────────────────
+
+const ROWS_OPTIONS = [10, 25, 50, 100];
 
 export default function ClientesPage() {
-  const canEdit = useAuthStore((s) => s.hasRoles(['administrador', 'supervisor']));
-  const [search, setSearch]     = useState('');
-  const [page, setPage]         = useState(1);
-  const [modal, setModal]       = useState(false);
-  const [editing, setEditing]   = useState<Customer | null>(null);
-  const [historial, setHistorial] = useState<Customer | null>(null);
-  const [toDelete, setToDelete] = useState<Customer | null>(null);
+  const [search,  setSearch]  = useState('');
+  const [page,       setPage]       = useState(1);
+  const [limit,      setLimit]      = useState(10);
+  const [modal,      setModal]      = useState(false);
+  const [editing,    setEditing]    = useState<Customer | null>(null);
+  const [exporting,  setExporting]  = useState(false);
+
+  // Reset page on search/limit change
+  useEffect(() => { setPage(1); }, [search, limit]);
+
+  const { data: stats } = useQuery({
+    queryKey: ['customers-stats'],
+    queryFn:  customersService.getStats,
+    staleTime: 30_000,
+  });
 
   const { data, isLoading } = useQuery({
-    queryKey: ['customers', { search, page }],
-    queryFn:  () => customersService.getAll({ search, page, limit: LIMIT }),
+    queryKey: ['customers', { search, page, limit }],
+    queryFn:  () => customersService.getAll({ search, page, limit }),
     placeholderData: (p) => p,
   });
 
-  // El backend devuelve array directo (sin paginar)
-  const customers  = Array.isArray(data) ? data : (data?.data ?? []);
-  const totalPages = Array.isArray(data) ? 1 : (data?.totalPages ?? 1);
+  const customers  = data?.data       ?? [];
+  const total      = data?.total      ?? 0;
+  const totalPages = data?.totalPages ?? 1;
+
+  const handleExport = async () => {
+    setExporting(true);
+    try {
+      const all = await customersService.getAll({ limit: 9999 });
+      exportCSV(all.data);
+    } finally {
+      setExporting(false);
+    }
+  };
+  const from = total === 0 ? 0 : (page - 1) * limit + 1;
+  const to   = Math.min(page * limit, total);
+
+  const openNew  = () => { setEditing(null); setModal(true); };
+  const openEdit = (c: Customer) => { setEditing(c); setModal(true); };
 
   return (
-    <div className="space-y-4">
-      <div className="flex flex-wrap items-center gap-3">
-        <div className="flex-1 min-w-[200px]">
-          <Input placeholder="Buscar cliente o documento..." icon={<Search size={15} />} value={search} onChange={(e) => { setSearch(e.target.value); setPage(1); }} />
+    <div className="p-6 space-y-5">
+
+      {/* ── Header ── */}
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <h1 className="text-xl font-bold text-slate-900">Clientes</h1>
+          <p className="text-sm text-slate-500 mt-0.5">Gestión de datos comerciales y ubicación</p>
+
+          {/* Stats chips */}
+          <div className="flex flex-wrap gap-2 mt-3">
+            <span className="inline-flex items-center gap-1.5 text-xs font-medium bg-blue-50 text-blue-700 border border-blue-200 rounded-full px-3 py-1">
+              <Users size={12} />
+              {stats?.total ?? total} clientes
+            </span>
+            <span className="inline-flex items-center gap-1.5 text-xs font-medium bg-emerald-50 text-emerald-700 border border-emerald-200 rounded-full px-3 py-1">
+              <CheckCircle2 size={12} />
+              {stats?.activos ?? total} activos
+            </span>
+            <span className="inline-flex items-center gap-1.5 text-xs font-medium bg-slate-100 text-slate-500 border border-slate-200 rounded-full px-3 py-1">
+              <XCircle size={12} />
+              {stats?.inactivos ?? 0} inactivos
+            </span>
+          </div>
         </div>
-        {canEdit && <Button icon={<Plus size={16} />} onClick={() => { setEditing(null); setModal(true); }}>Nuevo Cliente</Button>}
+
+        <div className="flex gap-2">
+          <Button
+            variant="outline"
+            icon={<FileSpreadsheet size={15} className="text-emerald-600" />}
+            onClick={handleExport}
+            disabled={exporting}
+            className="border-emerald-300 text-emerald-700 hover:bg-emerald-50"
+          >
+            {exporting ? 'Exportando...' : 'EXCEL'}
+          </Button>
+          <Button icon={<UserPlus size={15} />} onClick={openNew}>
+            NUEVO CLIENTE
+          </Button>
+        </div>
       </div>
 
-      <Card padding="none">
-        <div className="flex items-center gap-2 px-5 py-3 border-b border-slate-100">
-          <Users size={15} className="text-slate-400" />
-          <span className="text-sm text-slate-600"><strong>{customers.length}</strong> clientes</span>
-        </div>
+      {/* ── Buscador ── */}
+      <div className="relative">
+        <Search size={16} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+        <input
+          type="text"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Buscar por documento, nombre, distrito, telefono o nota"
+          className="w-full pl-10 pr-4 py-2.5 text-sm border border-slate-300 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+        />
+      </div>
 
+      {/* ── Tabla ── */}
+      <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
-            <thead><tr className="bg-slate-50 border-b">
-              <th className="text-left text-xs font-semibold text-slate-500 px-4 py-3">Nombre</th>
-              <th className="text-left text-xs font-semibold text-slate-500 px-4 py-3">Documento</th>
-              <th className="text-left text-xs font-semibold text-slate-500 px-4 py-3">Contacto</th>
-              <th className="text-right text-xs font-semibold text-slate-500 px-4 py-3">Crédito usado</th>
-              <th className="text-right text-xs font-semibold text-slate-500 px-4 py-3">Límite</th>
-              <th className="text-center text-xs font-semibold text-slate-500 px-4 py-3">Acciones</th>
-            </tr></thead>
-            <tbody>
+            <thead>
+              <tr className="border-b border-slate-200 bg-slate-50">
+                <th className="text-left text-xs font-semibold text-slate-500 uppercase tracking-wide px-5 py-3">Documento</th>
+                <th className="text-left text-xs font-semibold text-slate-500 uppercase tracking-wide px-5 py-3">Nombre</th>
+                <th className="text-left text-xs font-semibold text-slate-500 uppercase tracking-wide px-5 py-3">Telefono</th>
+                <th className="text-left text-xs font-semibold text-slate-500 uppercase tracking-wide px-5 py-3">Sede</th>
+                <th className="text-left text-xs font-semibold text-slate-500 uppercase tracking-wide px-5 py-3">Distrito</th>
+                <th className="text-right text-xs font-semibold text-slate-500 uppercase tracking-wide px-5 py-3">Actions</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
               {isLoading ? (
                 <tr><td colSpan={6} className="py-16 text-center"><Spinner className="mx-auto" /></td></tr>
               ) : customers.length === 0 ? (
-                <tr><td colSpan={6} className="py-16 text-center text-slate-400">Sin clientes</td></tr>
-              ) : customers.map((c) => {
-                const deuda = Number(c.creditoUsado);
-                return (
-                  <tr key={c.id} className="border-b border-slate-50 hover:bg-slate-50">
-                    <td className="px-4 py-3 font-medium text-slate-800">{c.nombreCompleto}</td>
-                    <td className="px-4 py-3 text-slate-500">{c.tipoDocumento}: {c.numeroDocumento}</td>
-                    <td className="px-4 py-3 text-slate-500">{c.telefono ?? c.email ?? '—'}</td>
-                    <td className="px-4 py-3 text-right">
-                      {deuda > 0 ? <span className="text-red-600 font-semibold">{formatCurrency(deuda)}</span> : <span className="text-slate-400">—</span>}
-                    </td>
-                    <td className="px-4 py-3 text-right text-slate-600">{c.creditoLimite > 0 ? formatCurrency(Number(c.creditoLimite)) : '—'}</td>
-                    <td className="px-4 py-3">
-                      <div className="flex items-center justify-center gap-1">
-                        <button onClick={() => setHistorial(c)} className="p-1.5 rounded-lg hover:bg-blue-50 text-slate-400 hover:text-blue-600" title="Historial">
-                          <History size={15} />
-                        </button>
-                        {canEdit && <>
-                          <button onClick={() => { setEditing(c); setModal(true); }} className="p-1.5 rounded-lg hover:bg-amber-50 text-slate-400 hover:text-amber-600" title="Editar">
-                            <Pencil size={15} />
-                          </button>
-                          <button onClick={() => setToDelete(c)} className="p-1.5 rounded-lg hover:bg-red-50 text-slate-400 hover:text-red-500" title="Eliminar">
-                            <Trash2 size={15} />
-                          </button>
-                        </>}
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })}
+                <tr><td colSpan={6} className="py-16 text-center text-slate-400 text-sm">Sin clientes registrados</td></tr>
+              ) : customers.map((c) => (
+                <tr key={c.id} className="hover:bg-slate-50 transition-colors">
+                  <td className="px-5 py-3 font-bold text-slate-800">{c.numeroDocumento}</td>
+                  <td className="px-5 py-3 text-slate-700">{c.nombreCompleto}</td>
+                  <td className="px-5 py-3 text-slate-500">{c.telefono ?? '-'}</td>
+                  <td className="px-5 py-3 text-slate-500">{c.razonSocial ?? '-'}</td>
+                  <td className="px-5 py-3 text-slate-500 uppercase">{c.distrito ?? '-'}</td>
+                  <td className="px-5 py-3 text-right">
+                    <button
+                      onClick={() => openEdit(c)}
+                      className="p-1.5 rounded-lg text-emerald-600 hover:bg-emerald-50 transition-colors"
+                      title="Editar"
+                    >
+                      <Pencil size={15} />
+                    </button>
+                  </td>
+                </tr>
+              ))}
             </tbody>
           </table>
         </div>
 
-        {totalPages > 1 && (
-          <div className="flex items-center justify-between px-5 py-3 border-t">
-            <p className="text-xs text-slate-500">Página {page} de {totalPages}</p>
-            <div className="flex gap-1">
-              <Button variant="outline" size="sm" icon={<ChevronLeft size={14} />} disabled={page === 1} onClick={() => setPage((p) => p - 1)} />
-              <Button variant="outline" size="sm" icon={<ChevronRight size={14} />} disabled={page >= totalPages} onClick={() => setPage((p) => p + 1)} />
-            </div>
+        {/* ── Paginación ── */}
+        <div className="flex items-center justify-end gap-4 px-5 py-3 border-t border-slate-100 bg-white">
+          <div className="flex items-center gap-2 text-xs text-slate-500">
+            <span>Rows per page:</span>
+            <select
+              value={limit}
+              onChange={(e) => setLimit(Number(e.target.value))}
+              className="border border-slate-300 rounded px-1.5 py-0.5 text-xs focus:outline-none focus:ring-1 focus:ring-blue-500"
+            >
+              {ROWS_OPTIONS.map((n) => <option key={n} value={n}>{n}</option>)}
+            </select>
           </div>
-        )}
-      </Card>
 
-      <CustomerModal open={modal} onClose={() => { setModal(false); setEditing(null); }} customer={editing} />
-      <HistorialModal open={!!historial} onClose={() => setHistorial(null)} customer={historial} />
-      {toDelete && <DeleteModal customer={toDelete} onClose={() => setToDelete(null)} />}
+          <span className="text-xs text-slate-500">
+            {from}-{to} of {total}
+          </span>
+
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => setPage((p) => p - 1)}
+              disabled={page === 1}
+              className="p-1 rounded hover:bg-slate-100 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+            >
+              <ChevronLeft size={16} className="text-slate-600" />
+            </button>
+            <button
+              onClick={() => setPage((p) => p + 1)}
+              disabled={page >= totalPages}
+              className="p-1 rounded hover:bg-slate-100 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+            >
+              <ChevronRight size={16} className="text-slate-600" />
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <CustomerModal
+        open={modal}
+        onClose={() => { setModal(false); setEditing(null); }}
+        customer={editing}
+      />
     </div>
   );
 }

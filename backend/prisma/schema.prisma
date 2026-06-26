@@ -12,19 +12,29 @@ datasource db {
 // ─────────────────────────────────────────────
 // NEGOCIO
 // ─────────────────────────────────────────────
+
+enum BusinessStatus {
+  pendiente
+  activo
+  suspendido
+  cancelado
+}
+
 model Business {
-  id              String   @id @default(uuid())
-  ruc             String   @unique @db.VarChar(11)
-  razonSocial     String   @db.VarChar(200)
-  nombreComercial String?  @db.VarChar(200)
+  id              String         @id @default(uuid())
+  ruc             String         @unique @db.VarChar(11)
+  razonSocial     String         @db.VarChar(200)
+  nombreComercial String?        @db.VarChar(200)
   direccion       String?
-  telefono        String?  @db.VarChar(20)
-  email           String?  @db.VarChar(100)
+  telefono        String?        @db.VarChar(20)
+  email           String?        @db.VarChar(100)
   logoUrl         String?
-  nubefactToken   String?  @db.VarChar(200)
-  sunatMode       String   @default("demo") @db.VarChar(20)
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  nubefactRuta    String?        @db.VarChar(500)
+  nubefactToken   String?        @db.Text
+  sunatMode       String         @default("demo") @db.VarChar(20)
+  status          BusinessStatus @default(pendiente)
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
 
   users              User[]
   customers          Customer[]
@@ -39,8 +49,50 @@ model Business {
   paymentMethods     PaymentMethod[]
   documentSeries     DocumentSeries[]
   auditLogs          AuditLog[]
+  subscription       BusinessSubscription?
+  proformas          Proforma[]
 
   @@map("businesses")
+}
+
+// ─────────────────────────────────────────────
+// PLANES Y SUSCRIPCIONES
+// ─────────────────────────────────────────────
+
+model Plan {
+  id              String   @id @default(uuid())
+  nombre          String   @unique @db.VarChar(100)
+  descripcion     String?
+  precio          Decimal  @db.Decimal(10, 2)
+  duracionDias    Int      @default(30)
+  isActive        Boolean  @default(true)
+  // Límites (null = ilimitado)
+  maxUsuarios     Int?
+  maxProductos    Int?
+  maxVentasMes    Int?
+  maxDocumentosMes Int?
+  createdAt       DateTime @default(now())
+
+  subscriptions BusinessSubscription[]
+
+  @@map("plans")
+}
+
+model BusinessSubscription {
+  id            String         @id @default(uuid())
+  businessId    String         @unique
+  business      Business       @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  planId        String?
+  plan          Plan?          @relation(fields: [planId], references: [id])
+  estado        BusinessStatus @default(pendiente)
+  fechaInicio   DateTime?
+  fechaFin      DateTime?
+  montoPagado   Decimal        @default(0) @db.Decimal(12, 2)
+  notas         String?
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+
+  @@map("business_subscriptions")
 }
 
 // ─────────────────────────────────────────────
@@ -88,12 +140,15 @@ model User {
   nombre              String    @db.VarChar(100)
   apellido            String    @db.VarChar(100)
   isActive            Boolean   @default(true)
-  twoFactorEnabled    Boolean   @default(false)
-  twoFactorSecret     String?
-  avatarUrl           String?
-  failedLoginAttempts Int       @default(0)
-  lockedUntil         DateTime?
-  lastLogin           DateTime?
+  twoFactorEnabled      Boolean   @default(false)
+  twoFactorSecret       String?
+  avatarUrl             String?
+  failedLoginAttempts   Int       @default(0)
+  lockedUntil           DateTime?
+  lastLogin             DateTime?
+  tokenVersion          Int       @default(0)
+  passwordResetToken    String?   @db.Text
+  passwordResetExpires  DateTime?
   createdAt           DateTime  @default(now())
   updatedAt           DateTime  @updatedAt
 
@@ -104,6 +159,7 @@ model User {
   cashMovements      CashMovement[]
   inventoryMovements InventoryMovement[]
   auditLogs          AuditLog[]
+  proformas          Proforma[]
 
   @@map("users")
 }
@@ -129,7 +185,12 @@ model Customer {
   email           String?        @db.VarChar(100)
   telefono        String?        @db.VarChar(20)
   direccion       String?
+  distrito        String?        @db.VarChar(150)
+  departamento    String?        @db.VarChar(100)
+  provincia       String?        @db.VarChar(100)
   ubigeo          String?        @db.VarChar(10)
+  referencia      String?        @db.VarChar(200)
+  nota            String?        @db.VarChar(500)
   creditoLimite   Decimal        @default(0) @db.Decimal(12, 2)
   creditoUsado    Decimal        @default(0) @db.Decimal(12, 2)
   isActive        Boolean        @default(true)
@@ -138,6 +199,7 @@ model Customer {
 
   sales               Sale[]
   electronicDocuments ElectronicDocument[]
+  proformas           Proforma[]
 
   @@map("customers")
 }
@@ -210,6 +272,7 @@ model Product {
 
   saleItems          SaleItem[]
   purchaseItems      PurchaseItem[]
+  proformaItems      ProformaItem[]
   inventoryMovements InventoryMovement[]
 
   @@index([businessId, isActive])
@@ -246,11 +309,58 @@ model InventoryMovement {
   fecha          DateTime
 
   @@index([productId, fecha])
+  @@index([businessId, fecha])
+  @@index([businessId, tipo])
   @@map("inventory_movements")
 }
 
 // ─────────────────────────────────────────────
 // VENTAS
+// ─────────────────────────────────────────────
+enum ProformaStatus {
+  pendiente
+  emitida
+  cancelada
+}
+
+model Proforma {
+  id            String         @id @default(uuid())
+  businessId    String
+  business      Business       @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  customerId    String?
+  customer      Customer?      @relation(fields: [customerId], references: [id])
+  userId        String
+  user          User           @relation(fields: [userId], references: [id])
+  numero        String         @db.VarChar(20)
+  fecha         DateTime       @default(now())
+  subtotal      Decimal        @db.Decimal(12, 2)
+  igv           Decimal        @db.Decimal(12, 2)
+  total         Decimal        @db.Decimal(12, 2)
+  observaciones String?        @db.Text
+  estado        ProformaStatus @default(pendiente)
+  items         ProformaItem[]
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+
+  @@map("proformas")
+}
+
+model ProformaItem {
+  id             String    @id @default(uuid())
+  proformaId     String
+  proforma       Proforma  @relation(fields: [proformaId], references: [id], onDelete: Cascade)
+  productId      String?
+  product        Product?  @relation(fields: [productId], references: [id])
+  descripcion    String?   @db.VarChar(255)
+  cantidad       Decimal   @db.Decimal(12, 4)
+  precioUnitario Decimal   @db.Decimal(12, 4)
+  subtotal       Decimal   @db.Decimal(12, 4)
+  igvMonto       Decimal   @default(0) @db.Decimal(12, 4)
+  total          Decimal   @db.Decimal(12, 4)
+
+  @@map("proforma_items")
+}
+
 // ─────────────────────────────────────────────
 enum TipoVenta {
   contado
@@ -294,22 +404,24 @@ model Sale {
   cashMovements       CashMovement[]
 
   @@index([businessId, fecha])
+  @@index([businessId, estado, fecha])
   @@index([customerId])
   @@map("sales")
 }
 
 model SaleItem {
-  id             String  @id @default(uuid())
+  id             String   @id @default(uuid())
   saleId         String
-  sale           Sale    @relation(fields: [saleId], references: [id], onDelete: Cascade)
-  productId      String
-  product        Product @relation(fields: [productId], references: [id])
-  cantidad       Decimal @db.Decimal(12, 4)
-  precioUnitario Decimal @db.Decimal(12, 4)
-  descuento      Decimal @default(0) @db.Decimal(12, 4)
-  subtotal       Decimal @db.Decimal(12, 4)
-  igvMonto       Decimal @default(0) @db.Decimal(12, 4)
-  total          Decimal @db.Decimal(12, 4)
+  sale           Sale     @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  productId      String?
+  product        Product? @relation(fields: [productId], references: [id])
+  descripcion    String?  @db.VarChar(255)
+  cantidad       Decimal  @db.Decimal(12, 4)
+  precioUnitario Decimal  @db.Decimal(12, 4)
+  descuento      Decimal  @default(0) @db.Decimal(12, 4)
+  subtotal       Decimal  @db.Decimal(12, 4)
+  igvMonto       Decimal  @default(0) @db.Decimal(12, 4)
+  total          Decimal  @db.Decimal(12, 4)
 
   @@map("sale_items")
 }
@@ -467,6 +579,8 @@ model CashSession {
   movements CashMovement[]
   sales     Sale[]
 
+  @@index([businessId, userId, estado])
+  @@index([businessId, estado])
   @@map("cash_sessions")
 }
 
@@ -555,6 +669,37 @@ model DocumentSeries {
 
   @@unique([businessId, serie])
   @@map("document_series")
+}
+
+// ─────────────────────────────────────────────
+// SUPER ADMIN — BÓVEDA Y RECORDATORIOS
+// ─────────────────────────────────────────────
+
+model AdminCredential {
+  id                String   @id @default(uuid())
+  servicio          String   @db.VarChar(100)
+  url               String?  @db.VarChar(500)
+  usuario           String?  @db.VarChar(200)
+  passwordEncrypted String?  @db.Text
+  notas             String?  @db.Text
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@map("admin_credentials")
+}
+
+model PaymentReminder {
+  id             String   @id @default(uuid())
+  servicio       String   @db.VarChar(100)
+  monto          Decimal? @db.Decimal(12, 2)
+  moneda         String   @default("USD") @db.VarChar(5)
+  diaVencimiento Int?
+  notas          String?  @db.Text
+  activo         Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@map("payment_reminders")
 }
 
 // ─────────────────────────────────────────────

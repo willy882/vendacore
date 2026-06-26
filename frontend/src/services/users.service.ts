@@ -19,9 +19,12 @@ export const usersService = {
   create: (data: CreateUserData) =>
     api.post<User>('/users', data).then((r) => r.data),
 
-  update: (id: string, data: Partial<Omit<CreateUserData, 'password'>> & { isActive?: boolean }) =>
+  update: (id: string, data: Partial<Omit<CreateUserData, 'password'>> & { isActive?: boolean; newPassword?: string }) =>
     api.put<User>(`/users/${id}`, data).then((r) => r.data),
 
   toggleActive: (id: string, isActive: boolean) =>
     api.patch<User>(`/users/${id}/toggle-active`, { isActive }).then((r) => r.data),
+
+  delete: (id: string) =>
+    api.delete(`/users/${id}`).then((r) => r.data),
 };

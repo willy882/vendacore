@@ -2,13 +2,23 @@ import { Injectable, BadRequestException, Logger } from '@nestjs/common';
 import { PrismaService } from '../../database/prisma.service';
 import axios from 'axios';
 
-const NUBEFACT_BASE = 'https://api.nubefact.com/api/v1';
+const APIS_PERU_URL     = 'https://facturacion.apisperu.com/api/v1/invoice/send';
+const APIS_PERU_PDF_URL = 'https://facturacion.apisperu.com/api/v1/invoice/pdf';
+const APIS_PERU_NC_URL  = 'https://facturacion.apisperu.com/api/v1/creditnote/send';
 
-// Tipo de IGV: 1 = Gravado, 2 = Exonerado, 3 = Inafecto
-const IGV_TIPO_MAP: Record<string, number> = {
-  gravado:    1,
-  exonerado:  2,
-  inafecto:   3,
+// tipAfeIgv: 10=gravado, 20=exonerado, 30=inafecto
+const IGV_TIP_MAP: Record<string, number> = {
+  gravado:   10,
+  exonerado: 20,
+  inafecto:  30,
+};
+
+// tipoDoc cliente según catálogo SUNAT
+const CLIENT_DOC_MAP: Record<string, string> = {
+  ruc:       '6',
+  dni:       '1',
+  ce:        '4',
+  pasaporte: '7',
 };
 
 @Injectable()
@@ -17,148 +27,338 @@ export class SunatService {
 
   constructor(private prisma: PrismaService) {}
 
-  /** Obtiene la configuración OSE del negocio */
   private async getBusinessConfig(businessId: string) {
     const biz = await this.prisma.business.findUnique({
       where: { id: businessId },
       select: {
-        ruc: true,
-        razonSocial: true,
+        ruc:           true,
+        razonSocial:   true,
         nombreComercial: true,
-        direccion: true,
-        nubefactToken: true,
-        sunatMode: true,
+        direccion:     true,
+        nubefactToken: true,   // reutilizamos este campo para el token de APIs Peru
+        sunatMode:     true,
       },
     });
 
     if (!biz) throw new BadRequestException('Negocio no encontrado');
     if (!biz.nubefactToken) {
       throw new BadRequestException(
-        'No hay token de Nubefact configurado. Configúralo en Configuración → SUNAT / OSE',
+        'No hay token de APIs Peru configurado. Ve a Configuración → SUNAT / OSE',
       );
     }
     return biz;
   }
 
-  /** Construye el payload para Nubefact según el tipo de comprobante */
+  // ---------------------------------------------------------------------------
+  // Convertir número a palabras en español (para la leyenda del comprobante)
+  // ---------------------------------------------------------------------------
+
+  private intToWords(n: number): string {
+    if (n === 0) return 'CERO';
+
+    const units = [
+      '', 'UNO', 'DOS', 'TRES', 'CUATRO', 'CINCO', 'SEIS', 'SIETE', 'OCHO', 'NUEVE',
+      'DIEZ', 'ONCE', 'DOCE', 'TRECE', 'CATORCE', 'QUINCE', 'DIECISEIS', 'DIECISIETE',
+      'DIECIOCHO', 'DIECINUEVE', 'VEINTE', 'VEINTIUN', 'VEINTIDOS', 'VEINTITRES',
+      'VEINTICUATRO', 'VEINTICINCO', 'VEINTISEIS', 'VEINTISIETE', 'VEINTIOCHO', 'VEINTINUEVE',
+    ];
+    const tens     = ['', '', 'VEINTE', 'TREINTA', 'CUARENTA', 'CINCUENTA', 'SESENTA', 'SETENTA', 'OCHENTA', 'NOVENTA'];
+    const hundreds = ['', 'CIENTO', 'DOSCIENTOS', 'TRESCIENTOS', 'CUATROCIENTOS', 'QUINIENTOS',
+                      'SEISCIENTOS', 'SETECIENTOS', 'OCHOCIENTOS', 'NOVECIENTOS'];
+
+    if (n < 30) return units[n];
+
+    if (n < 100) {
+      const u = n % 10;
+      return u === 0 ? tens[Math.floor(n / 10)] : `${tens[Math.floor(n / 10)]} Y ${units[u]}`;
+    }
+
+    if (n === 100) return 'CIEN';
+
+    if (n < 1_000) {
+      const rest = n % 100;
+      return rest === 0
+        ? hundreds[Math.floor(n / 100)]
+        : `${hundreds[Math.floor(n / 100)]} ${this.intToWords(rest)}`;
+    }
+
+    if (n < 2_000) {
+      const rest = n % 1_000;
+      return rest === 0 ? 'MIL' : `MIL ${this.intToWords(rest)}`;
+    }
+
+    if (n < 1_000_000) {
+      const th   = Math.floor(n / 1_000);
+      const rest = n % 1_000;
+      const thStr = `${this.intToWords(th)} MIL`;
+      return rest === 0 ? thStr : `${thStr} ${this.intToWords(rest)}`;
+    }
+
+    if (n < 2_000_000) {
+      const rest = n % 1_000_000;
+      return rest === 0 ? 'UN MILLON' : `UN MILLON ${this.intToWords(rest)}`;
+    }
+
+    const m    = Math.floor(n / 1_000_000);
+    const rest = n % 1_000_000;
+    const mStr = `${this.intToWords(m)} MILLONES`;
+    return rest === 0 ? mStr : `${mStr} ${this.intToWords(rest)}`;
+  }
+
+  private numberToWords(amount: number): string {
+    const intPart = Math.floor(amount);
+    const cents   = Math.round((amount - intPart) * 100);
+    return `SON ${this.intToWords(intPart)} CON ${String(cents).padStart(2, '0')}/100 SOLES`;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Construir payload para APIs Peru
+  // ---------------------------------------------------------------------------
+
   private buildPayload(doc: any, sale: any, biz: any): Record<string, any> {
-    const customer = doc.customer ?? {};
-    const isFactura = doc.tipo === 'factura';
+    const customer   = doc.customer ?? {};
+    const isFactura  = doc.tipo === 'factura';
 
-    // Mapear tipo de documento del cliente
-    const clienteTipoDoc = customer.tipoDocumento === 'ruc' ? '6' : '1';
+    let mtoOperGravadas   = 0;
+    let mtoOperExoneradas = 0;
+    let mtoOperInafectas  = 0;
+    let mtoIGV            = 0;
 
-    // Total base imponible (sin IGV) y total exonerado
-    const totalGravada = sale.items
-      .filter((i: any) => (i.product?.igvTipo ?? 'gravado') === 'gravado')
-      .reduce((acc: number, i: any) => acc + Number(i.subtotal), 0);
+    const details = sale.items.map((item: any) => {
+      const igvTipo   = item.product?.igvTipo ?? 'gravado';
+      const tipAfeIgv = IGV_TIP_MAP[igvTipo] ?? 10;
+      const cantidad  = Number(item.cantidad);
 
-    const totalExonerada = sale.items
-      .filter((i: any) => i.product?.igvTipo === 'exonerado')
-      .reduce((acc: number, i: any) => acc + Number(i.subtotal), 0);
+      // precioUnitario en BD es el precio de venta al público (incluye IGV si el producto es gravado)
+      const precioConIgv     = Number(item.precioUnitario);
+      const mtoValorUnitario = tipAfeIgv === 10 ? precioConIgv / 1.18 : precioConIgv;
+      const mtoValorVenta    = parseFloat((mtoValorUnitario * cantidad).toFixed(2));
+      const igv              = tipAfeIgv === 10 ? parseFloat((mtoValorVenta * 0.18).toFixed(2)) : 0;
+      const porcentajeIgv    = tipAfeIgv === 10 ? 18 : 0;
 
-    const totalInafecta = sale.items
-      .filter((i: any) => i.product?.igvTipo === 'inafecto')
-      .reduce((acc: number, i: any) => acc + Number(i.subtotal), 0);
-
-    const items = sale.items.map((item: any) => {
-      const igvTipo = IGV_TIPO_MAP[item.product?.igvTipo ?? 'gravado'] ?? 1;
-      const cantidad = Number(item.cantidad);
-      const valorUnitario = Number(item.precioUnitario) / 1.18;      // precio sin IGV
-      const precioUnitario = Number(item.precioUnitario);
-      const subtotal = valorUnitario * cantidad;
-      const igvItem = igvTipo === 1 ? subtotal * 0.18 : 0;
-      const total = precioUnitario * cantidad;
+      if      (tipAfeIgv === 10) { mtoOperGravadas   += mtoValorVenta; mtoIGV += igv; }
+      else if (tipAfeIgv === 20)   mtoOperExoneradas += mtoValorVenta;
+      else if (tipAfeIgv === 30)   mtoOperInafectas  += mtoValorVenta;
 
       return {
-        unidad_de_medida: 'NIU',
-        codigo: item.product?.codigoInterno ?? 'P001',
-        descripcion: item.product?.nombre ?? 'Producto',
-        cantidad,
-        valor_unitario: parseFloat(valorUnitario.toFixed(6)),
-        precio_unitario: parseFloat(precioUnitario.toFixed(2)),
-        descuento: '',
-        subtotal: parseFloat(subtotal.toFixed(2)),
-        tipo_de_igv: igvTipo,
-        igv: parseFloat(igvItem.toFixed(2)),
-        total: parseFloat(total.toFixed(2)),
-        anticipo_regularizacion: false,
-        anticipo_documento_serie: '',
-        anticipo_documento_numero: '',
+        codProducto:       item.product?.codigoInterno ?? 'P001',
+        unidad:            'NIU',
+        descripcion:       item.product?.nombre ?? 'Producto',
+        cantidad:          parseFloat(cantidad.toFixed(2)),
+        mtoValorUnitario:  parseFloat(mtoValorUnitario.toFixed(6)),
+        mtoValorVenta,
+        mtoBaseIgv:        mtoValorVenta,
+        porcentajeIgv,
+        igv,
+        tipAfeIgv,
+        totalImpuestos:    igv,
+        mtoPrecioUnitario: parseFloat(precioConIgv.toFixed(2)),
       };
     });
 
-    // Método de pago principal
-    const metodoPago = sale.payments?.[0]?.paymentMethod?.nombre ?? 'Efectivo';
+    mtoOperGravadas   = parseFloat(mtoOperGravadas.toFixed(2));
+    mtoOperExoneradas = parseFloat(mtoOperExoneradas.toFixed(2));
+    mtoOperInafectas  = parseFloat(mtoOperInafectas.toFixed(2));
+    mtoIGV            = parseFloat(mtoIGV.toFixed(2));
+
+    const valorVenta  = parseFloat((mtoOperGravadas + mtoOperExoneradas + mtoOperInafectas).toFixed(2));
+    const mtoImpVenta = parseFloat(Number(doc.total).toFixed(2));
+
+    // Fecha en formato ISO con offset de Lima (-05:00)
+    const dateStr    = new Date(doc.fechaEmision).toISOString().split('T')[0];
+    const fechaEmision = `${dateStr}T00:00:00-05:00`;
+
+    // tipoDoc del cliente
+    const tipoDocCliente = CLIENT_DOC_MAP[customer.tipoDocumento] ?? '1';
+    const numDocCliente  = customer.numeroDocumento ?? '00000000';
 
     const payload: Record<string, any> = {
-      operacion: 'generar_comprobante',
-      tipo_de_comprobante: isFactura ? 1 : 2,
-      serie: doc.serie,
-      numero: doc.correlativo,
-      sunat_transaction: 1,
-      cliente_tipo_de_documento: clienteTipoDoc,
-      cliente_numero_de_documento: customer.numeroDocumento ?? '00000000',
-      cliente_denominacion: customer.nombreCompleto ?? 'Clientes Varios',
-      cliente_direccion: customer.direccion ?? '',
-      cliente_email: customer.email ?? '',
-      fecha_de_emision: new Date(doc.fechaEmision).toISOString().split('T')[0],
-      fecha_de_vencimiento: '',
-      moneda: 1,
-      tipo_de_cambio: '',
-      porcentaje_de_igv: 18.0,
-      descuento_global: 0,
-      total_descuento: Number(sale.descuentoGlobal ?? 0),
-      total_anticipo: 0,
-      total_gravada: parseFloat(totalGravada.toFixed(2)),
-      total_inafecta: parseFloat(totalInafecta.toFixed(2)),
-      total_exonerada: parseFloat(totalExonerada.toFixed(2)),
-      total_igv: parseFloat(Number(doc.igv).toFixed(2)),
-      total_gratuita: 0,
-      total_otros_cargos: 0,
-      total: parseFloat(Number(doc.total).toFixed(2)),
-      percepcion_tipo: '',
-      percepcion_base_imponible: 0,
-      total_percepcion: 0,
-      total_incluido_percepcion: 0,
-      detraccion: false,
-      observaciones: sale.observaciones ?? '',
-      documento_que_se_modifica_tipo: '',
-      documento_que_se_modifica_serie: '',
-      documento_que_se_modifica_numero: '',
-      tipo_de_nota_de_credito: '',
-      tipo_de_nota_de_debito: '',
-      enviar_automaticamente_a_la_sunat: true,
-      enviar_automaticamente_al_cliente: false,
-      codigo_unico: doc.id,
-      condiciones_de_pago: sale.tipoVenta === 'credito' ? 'Crédito' : 'Contado',
-      medio_de_pago: metodoPago,
-      placa_vehiculo: '',
-      orden_compra_servicio: '',
-      tabla_personalizada_codigo: '',
-      formato_de_pdf: '',
-      items,
+      ublVersion:    '2.1',
+      tipoOperacion: '0101',
+      tipoDoc:       isFactura ? '01' : '03',
+      serie:         doc.serie,
+      correlativo:   String(doc.correlativo),
+      fechaEmision,
+      formaPago: {
+        moneda: 'PEN',
+        tipo:   sale.tipoVenta === 'credito' ? 'Credito' : 'Contado',
+      },
+      tipoMoneda: 'PEN',
+      client: {
+        tipoDoc:   tipoDocCliente,
+        numDoc:    /^\d+$/.test(numDocCliente) ? Number(numDocCliente) : numDocCliente,
+        rznSocial: customer.nombreCompleto ?? 'CLIENTES VARIOS',
+        ...(customer.direccion ? { address: { direccion: customer.direccion } } : {}),
+      },
+      company: {
+        ruc:            biz.ruc,
+        razonSocial:    biz.razonSocial,
+        nombreComercial: biz.nombreComercial ?? biz.razonSocial,
+        address: {
+          direccion:    biz.direccion ?? '',
+          provincia:    '',
+          departamento: '',
+          distrito:     '',
+          ubigueo:      '',
+        },
+      },
+      mtoOperGravadas,
+      mtoIGV,
+      totalImpuestos: mtoIGV,
+      valorVenta,
+      subTotal:    parseFloat((valorVenta + mtoIGV).toFixed(2)),
+      mtoImpVenta,
+      details,
+      legends: [{ code: '1000', value: this.numberToWords(mtoImpVenta) }],
     };
 
-    // Factura requiere datos adicionales del emisor
-    if (isFactura) {
-      payload.serie_documento_relacionado = '';
-      payload.numero_documento_relacionado = '';
-    }
+    if (mtoOperExoneradas > 0) payload.mtoOperExoneradas = mtoOperExoneradas;
+    if (mtoOperInafectas  > 0) payload.mtoOperInafectas  = mtoOperInafectas;
 
     return payload;
   }
 
-  /** Envía el comprobante a Nubefact */
+  // ---------------------------------------------------------------------------
+  // Enviar comprobante a APIs Peru
+  // ---------------------------------------------------------------------------
+
   async sendDocument(documentId: string, businessId: string) {
-    // Cargar doc con todos los datos necesarios
     const doc = await this.prisma.electronicDocument.findFirst({
       where: { id: documentId, businessId },
       include: {
         customer: true,
         sale: {
           include: {
-            items: { include: { product: { select: { nombre: true, codigoInterno: true, igvTipo: true } } } },
+            items: {
+              include: {
+                product: { select: { nombre: true, codigoInterno: true, igvTipo: true } },
+              },
+            },
+            payments: { include: { paymentMethod: { select: { nombre: true } } } },
+          },
+        },
+      },
+    });
+
+    if (!doc) throw new BadRequestException('Comprobante no encontrado');
+    if (doc.estado === 'aceptado') throw new BadRequestException('El comprobante ya fue aceptado por SUNAT');
+
+    const biz = await this.getBusinessConfig(businessId);
+    let payload = this.buildPayload(doc, doc.sale, biz);
+    let url     = APIS_PERU_URL;
+
+    // Nota de crédito: payload y URL específicos
+    if (doc.tipo === 'nota_credito') {
+      url = APIS_PERU_NC_URL;
+      // Recuperar metadatos almacenados al crear la NC
+      const meta          = doc.respuestaSunat ?? '';
+      const originalNumero = meta.match(/original:([^|]+)/)?.[1]?.trim() ?? '';
+      const tipNota        = meta.match(/tipNota:([^|]+)/)?.[1]?.trim() ?? '01';
+      payload.tipoDoc  = '07';
+      payload.tipNota  = tipNota;
+      payload.numNota  = originalNumero;
+      delete payload.tipoOperacion;
+    }
+
+    this.logger.log(`Enviando ${doc.numeroCompleto} a APIs Peru [${biz.sunatMode}]`);
+    this.logger.debug(`Payload: ${JSON.stringify(payload)}`);
+
+    await this.prisma.electronicDocument.update({
+      where: { id: documentId },
+      data: { estado: 'enviado', fechaEnvio: new Date(), intentosEnvio: { increment: 1 } },
+    });
+
+    try {
+      const resp = await axios.post(url, payload, {
+        headers: {
+          Authorization:  `Bearer ${biz.nubefactToken}`,
+          'Content-Type': 'application/json',
+        },
+        timeout: 30_000,
+      });
+
+      // DocumentResponse: { xml, hash, sunatResponse: { success, cdrResponse: { accepted, code, description, notes } } }
+      const data        = resp.data;
+      const cdrResponse = data?.sunatResponse?.cdrResponse;
+      const description = cdrResponse?.description
+        ?? data?.sunatResponse?.error?.message
+        ?? null;
+      const aceptado =
+        cdrResponse?.accepted === true ||
+        data?.sunatResponse?.success === true ||
+        (typeof description === 'string' && description.toLowerCase().includes('aceptad'));
+      const nuevoEstado = aceptado ? 'aceptado' : 'rechazado';
+
+      this.logger.log(`APIs Peru → ${nuevoEstado}: ${description}`);
+
+      const updated = await this.prisma.electronicDocument.update({
+        where: { id: documentId },
+        data: {
+          estado:          nuevoEstado as any,
+          hashCpe:         data.hash ?? null,
+          respuestaSunat:  description,
+          errorDescripcion: aceptado ? null : description,
+          fechaRespuesta:  new Date(),
+        },
+      });
+
+      return {
+        estado:           updated.estado,
+        aceptado,
+        sunatDescription: description,
+        hashCpe:          data.hash ?? null,
+        numero:           doc.numeroCompleto,
+      };
+    } catch (error: any) {
+      const errData = error?.response?.data;
+      const errMsg  =
+        errData?.message
+        ?? errData?.sunatResponse?.error?.message
+        ?? error?.message
+        ?? 'Error al comunicarse con APIs Peru';
+
+      await this.prisma.electronicDocument.update({
+        where: { id: documentId },
+        data: {
+          estado:          'rechazado',
+          errorDescripcion: errMsg,
+          fechaRespuesta:  new Date(),
+        },
+      });
+
+      this.logger.error(`Error APIs Peru [${error?.response?.status}]: ${errMsg}`);
+      this.logger.error(`Respuesta completa: ${JSON.stringify(error?.response?.data)}`);
+      this.logger.error(`URL llamada: ${url}`);
+      throw new BadRequestException(`Error OSE: ${errMsg}`);
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Generar PDF del comprobante vía APIs Peru
+  // ---------------------------------------------------------------------------
+
+  /** Versión pública (sin autenticación): obtiene el businessId del propio documento */
+  async generatePdfPublic(documentId: string): Promise<Buffer> {
+    const doc = await this.prisma.electronicDocument.findUnique({
+      where: { id: documentId },
+      select: { businessId: true },
+    });
+    if (!doc) throw new BadRequestException('Comprobante no encontrado');
+    return this.generatePdf(documentId, doc.businessId);
+  }
+
+  async generatePdf(documentId: string, businessId: string): Promise<Buffer> {
+    const doc = await this.prisma.electronicDocument.findFirst({
+      where: { id: documentId, businessId },
+      include: {
+        customer: true,
+        sale: {
+          include: {
+            items: {
+              include: {
+                product: { select: { nombre: true, codigoInterno: true, igvTipo: true } },
+              },
+            },
             payments: { include: { paymentMethod: { select: { nombre: true } } } },
           },
         },
@@ -167,81 +367,18 @@ export class SunatService {
 
     if (!doc) throw new BadRequestException('Comprobante no encontrado');
 
-    if (doc.estado === 'aceptado') {
-      throw new BadRequestException('El comprobante ya fue aceptado por SUNAT');
-    }
-
-    const biz = await this.getBusinessConfig(businessId);
+    const biz     = await this.getBusinessConfig(businessId);
     const payload = this.buildPayload(doc, doc.sale, biz);
 
-    this.logger.log(`Enviando ${doc.numeroCompleto} a Nubefact [${biz.sunatMode}]`);
-
-    // Incrementar intentos de envío
-    await this.prisma.electronicDocument.update({
-      where: { id: documentId },
-      data: { estado: 'enviado', fechaEnvio: new Date(), intentosEnvio: { increment: 1 } },
+    const resp = await axios.post(APIS_PERU_PDF_URL, payload, {
+      headers: {
+        Authorization:  `Bearer ${biz.nubefactToken}`,
+        'Content-Type': 'application/json',
+      },
+      responseType: 'arraybuffer',
+      timeout: 30_000,
     });
 
-    const url = `${NUBEFACT_BASE}/${biz.ruc}/${doc.tipo === 'factura' ? 'facturas' : 'boletas'}`;
-
-    try {
-      const resp = await axios.post(url, payload, {
-        headers: {
-          Authorization: `Token ${biz.nubefactToken}`,
-          'Content-Type': 'application/json',
-        },
-        timeout: 30000,
-      });
-
-      const data = resp.data;
-      this.logger.log(`Respuesta Nubefact: ${JSON.stringify(data)}`);
-
-      // Interpretar respuesta
-      const aceptado = data.aceptada_por_sunat === true || data.codigo === '0';
-      const nuevoEstado = aceptado ? 'aceptado' : data.codigo === '2' ? 'observado' : 'rechazado';
-
-      const updated = await this.prisma.electronicDocument.update({
-        where: { id: documentId },
-        data: {
-          estado:          nuevoEstado as any,
-          hashCpe:         data.hash_cpe ?? null,
-          xmlUrl:          data.enlace_del_xml ?? null,
-          cdrUrl:          data.enlace_del_cdr ?? null,
-          pdfUrl:          data.enlace_del_pdf ?? null,
-          respuestaSunat:  data.sunat_description ?? data.mensaje ?? null,
-          errorDescripcion: !aceptado ? (data.sunat_description ?? data.descripcion ?? null) : null,
-          fechaRespuesta:  new Date(),
-        },
-      });
-
-      return {
-        estado:          updated.estado,
-        aceptado,
-        sunatDescription: data.sunat_description ?? null,
-        hashCpe:          data.hash_cpe ?? null,
-        enlacePdf:        data.enlace_del_pdf ?? null,
-        enlaceXml:        data.enlace_del_xml ?? null,
-        enlaceCdr:        data.enlace_del_cdr ?? null,
-        numero:           data.numero ?? doc.numeroCompleto,
-      };
-    } catch (error: any) {
-      // Guardar error
-      const errMsg = error?.response?.data?.errors?.[0]?.description
-        ?? error?.response?.data?.message
-        ?? error?.message
-        ?? 'Error al comunicarse con Nubefact';
-
-      await this.prisma.electronicDocument.update({
-        where: { id: documentId },
-        data: {
-          estado: 'rechazado',
-          errorDescripcion: errMsg,
-          fechaRespuesta: new Date(),
-        },
-      });
-
-      this.logger.error(`Error Nubefact: ${errMsg}`);
-      throw new BadRequestException(`Error OSE: ${errMsg}`);
-    }
+    return Buffer.from(resp.data);
   }
 }

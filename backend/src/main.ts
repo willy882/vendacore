@@ -3,13 +3,27 @@ import { ValidationPipe } from '@nestjs/common';
 import { AppModule } from './app.module';
 import helmet from 'helmet';
 import * as express from 'express';
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const compression = require('compression');
 
 async function bootstrap() {
+  // Validar variables de entorno críticas antes de arrancar
+  const jwtSecret = process.env.JWT_SECRET;
+  if (!jwtSecret || jwtSecret.length < 32) {
+    throw new Error('❌ JWT_SECRET es requerido y debe tener al menos 32 caracteres');
+  }
+  if (!process.env.DATABASE_URL) {
+    throw new Error('❌ DATABASE_URL es requerida');
+  }
+
   const app = await NestFactory.create(AppModule);
 
   // Aumentar límite de body para imágenes en base64
   app.use(express.json({ limit: '5mb' }));
   app.use(express.urlencoded({ limit: '5mb', extended: true }));
+
+  // Compresión gzip (reduce tamaño de respuestas ~70%)
+  app.use(compression());
 
   // Seguridad: headers HTTP seguros
   app.use(helmet());

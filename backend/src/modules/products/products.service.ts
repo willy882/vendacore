@@ -2,6 +2,7 @@ import {
   Injectable, NotFoundException, ConflictException, BadRequestException,
 } from '@nestjs/common';
 import { PrismaService } from '../../database/prisma.service';
+import { PlanEnforcementService } from '../plan-enforcement/plan-enforcement.service';
 import { CreateProductDto } from './dto/create-product.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
 import { CreateCategoryDto } from './dto/create-category.dto';
@@ -10,7 +11,10 @@ import { Prisma } from '@prisma/client';
 
 @Injectable()
 export class ProductsService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private planEnforcement: PlanEnforcementService,
+  ) {}
 
   // ── CATEGORÍAS ──────────────────────────────────────────────────────────
 
@@ -46,7 +50,7 @@ export class ProductsService {
   async deleteCategory(id: string, businessId: string) {
     const cat = await this.prisma.productCategory.findFirst({ where: { id, businessId } });
     if (!cat) throw new NotFoundException('Categoría no encontrada');
-    const hasProducts = await this.prisma.product.count({ where: { categoryId: id } });
+    const hasProducts = await this.prisma.product.count({ where: { categoryId: id, businessId } });
     if (hasProducts > 0) {
       throw new ConflictException('No puedes eliminar una categoría que tiene productos asignados');
     }
@@ -113,6 +117,7 @@ export class ProductsService {
   }
 
   async create(dto: CreateProductDto, businessId: string, userId?: string) {
+    await this.planEnforcement.checkProductos(businessId);
     if (dto.codigoInterno) {
       const dup = await this.prisma.product.findFirst({
         where: { codigoInterno: dto.codigoInterno, businessId },
@@ -186,14 +191,25 @@ export class ProductsService {
   }
 
   async getLowStockAlerts(businessId: string) {
-    const products = await this.prisma.product.findMany({
-      where: { businessId, isActive: true },
-      select: {
-        id: true, nombre: true, codigoInterno: true,
-        stockActual: true, stockMinimo: true,
-        category: { select: { nombre: true } },
-      },
-    });
-    return products.filter((p) => Number(p.stockActual) <= Number(p.stockMinimo));
+    // Filtro campo-a-campo directo en PostgreSQL, sin traer todos los productos a memoria
+    const rows = await this.prisma.$queryRaw<any[]>`
+      SELECT p.id, p.nombre, p."codigoInterno", p."stockActual", p."stockMinimo",
+             pc.nombre AS "categoryNombre"
+      FROM   products p
+      LEFT JOIN product_categories pc ON p."categoryId" = pc.id
+      WHERE  p."businessId" = ${businessId}::uuid
+        AND  p."isActive"   = true
+        AND  p."stockActual" <= p."stockMinimo"
+      ORDER BY p."stockActual" ASC
+      LIMIT  200
+    `;
+    return rows.map((r) => ({
+      id:           r.id,
+      nombre:       r.nombre,
+      codigoInterno: r.codigoInterno,
+      stockActual:  r.stockActual,
+      stockMinimo:  r.stockMinimo,
+      category:     r.categoryNombre ? { nombre: r.categoryNombre } : null,
+    }));
   }
 }

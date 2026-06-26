@@ -4,7 +4,7 @@ import { Roles } from '../../common/decorators/roles.decorator';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 
 @Controller('dashboard')
-@Roles('administrador', 'supervisor', 'contabilidad', 'auditor')
+@Roles('administrador', 'supervisor', 'contabilidad', 'auditor', 'cajero', 'vendedor', 'almacenero')
 export class DashboardController {
   constructor(private service: DashboardService) {}
 

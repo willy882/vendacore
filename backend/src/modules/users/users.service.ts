@@ -3,9 +3,11 @@ import {
   NotFoundException,
   ConflictException,
   BadRequestException,
+  ForbiddenException,
 } from '@nestjs/common';
 import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../../database/prisma.service';
+import { PlanEnforcementService } from '../plan-enforcement/plan-enforcement.service';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 
@@ -13,12 +15,25 @@ const BCRYPT_ROUNDS = parseInt(process.env.BCRYPT_ROUNDS || '12', 10);
 
 @Injectable()
 export class UsersService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private planEnforcement: PlanEnforcementService,
+  ) {}
 
   async findAll(businessId: string) {
     return this.prisma.user.findMany({
-      where: { businessId },
+      where: { businessId, role: { name: { not: 'super_admin' } } },
       include: { role: true },
+      orderBy: { nombre: 'asc' },
+    }).then((users) =>
+      users.map(({ passwordHash: _, twoFactorSecret: __, ...u }) => u),
+    );
+  }
+
+  async findAllGlobal() {
+    return this.prisma.user.findMany({
+      where: { role: { name: { not: 'super_admin' } } },
+      include: { role: true, business: true },
       orderBy: { nombre: 'asc' },
     }).then((users) =>
       users.map(({ passwordHash: _, twoFactorSecret: __, ...u }) => u),
@@ -44,9 +59,9 @@ export class UsersService {
   }
 
   async create(dto: CreateUserDto, businessId: string) {
-    const existing = await this.prisma.user.findUnique({
-      where: { email: dto.email },
-    });
+    await this.planEnforcement.checkUsuarios(businessId);
+
+    const existing = await this.prisma.user.findUnique({ where: { email: dto.email } });
     if (existing) throw new ConflictException('Ya existe un usuario con ese correo');
 
     const role = await this.prisma.role.findUnique({ where: { id: dto.roleId } });
@@ -71,8 +86,18 @@ export class UsersService {
     return safe;
   }
 
-  async update(id: string, dto: UpdateUserDto, businessId: string) {
-    await this.findOne(id, businessId); // lanza 404 si no existe
+  async update(id: string, dto: UpdateUserDto, businessId: string | null) {
+    // businessId null = super_admin, sin restricción de negocio
+    const existing = businessId
+      ? await this.prisma.user.findFirst({ where: { id, businessId }, include: { role: true } })
+      : await this.prisma.user.findUnique({ where: { id }, include: { role: true } });
+
+    if (!existing) throw new NotFoundException('Usuario no encontrado');
+
+    // Impedir desactivar super_admin
+    if ((existing as any).role?.name === 'super_admin' && dto.isActive === false) {
+      throw new ForbiddenException('No se puede desactivar un usuario super_admin');
+    }
 
     const updateData: any = {};
     if (dto.nombre) updateData.nombre = dto.nombre;
@@ -131,8 +156,26 @@ export class UsersService {
     });
   }
 
+  async deleteUser(id: string, businessId: string) {
+    const user = await this.prisma.user.findFirst({
+      where: { id, businessId },
+      include: { role: true },
+    });
+    if (!user) throw new NotFoundException('Usuario no encontrado');
+    if ((user as any).role?.name === 'administrador') {
+      // Contar cuántos admins activos quedan
+      const adminCount = await this.prisma.user.count({
+        where: { businessId, isActive: true, role: { name: 'administrador' } },
+      });
+      if (adminCount <= 1) throw new BadRequestException('No se puede eliminar el único administrador activo');
+    }
+    await this.prisma.user.delete({ where: { id } });
+    return { message: 'Usuario eliminado' };
+  }
+
   async findRoles() {
     return this.prisma.role.findMany({
+      where: { name: { not: 'super_admin' } },
       include: {
         permissions: { include: { permission: true } },
       },

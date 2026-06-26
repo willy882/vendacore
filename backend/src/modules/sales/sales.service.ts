@@ -2,7 +2,9 @@ import {
   Injectable, BadRequestException, NotFoundException, Logger,
 } from '@nestjs/common';
 import { PrismaService } from '../../database/prisma.service';
+import { PlanEnforcementService } from '../plan-enforcement/plan-enforcement.service';
 import { InventoryService } from '../inventory/inventory.service';
+import { DocumentsService } from '../documents/documents.service';
 import { CreateSaleDto } from './dto/create-sale.dto';
 import { CancelSaleDto } from './dto/cancel-sale.dto';
 import { QuerySaleDto } from './dto/query-sale.dto';
@@ -16,7 +18,9 @@ export class SalesService {
 
   constructor(
     private prisma: PrismaService,
+    private planEnforcement: PlanEnforcementService,
     private inventoryService: InventoryService,
+    private documentsService: DocumentsService,
   ) {}
 
   // ── MÉTODOS DE PAGO ─────────────────────────────────────────────────────
@@ -63,19 +67,25 @@ export class SalesService {
   // ── REGISTRAR VENTA ──────────────────────────────────────────────────────
 
   async create(dto: CreateSaleDto, userId: string, businessId: string) {
-    // 1. Validar productos y calcular totales
-    const productIds = dto.items.map((i) => i.productId);
-    const products = await this.prisma.product.findMany({
-      where: { id: { in: productIds }, businessId, isActive: true },
-    });
+    await this.planEnforcement.checkVentas(businessId);
 
-    if (products.length !== productIds.length) {
-      const found = products.map((p) => p.id);
-      const missing = productIds.filter((id) => !found.includes(id));
-      throw new BadRequestException(`Productos no encontrados o inactivos: ${missing.join(', ')}`);
+    // 1. Separar items con productId (catálogo) de items libres (sin productId)
+    const catalogItems  = dto.items.filter((i) => !!i.productId);
+
+    // Validar productos del catálogo
+    let productMap = new Map<string, any>();
+    if (catalogItems.length > 0) {
+      const productIds = catalogItems.map((i) => i.productId!);
+      const products = await this.prisma.product.findMany({
+        where: { id: { in: productIds }, businessId, isActive: true },
+      });
+      if (products.length !== productIds.length) {
+        const found = products.map((p) => p.id);
+        const missing = productIds.filter((id) => !found.includes(id));
+        throw new BadRequestException(`Productos no encontrados o inactivos: ${missing.join(', ')}`);
+      }
+      productMap = new Map(products.map((p) => [p.id, p]));
     }
-
-    const productMap = new Map(products.map((p) => [p.id, p]));
 
     // 2. Calcular items
     let subtotal = 0;
@@ -83,36 +93,38 @@ export class SalesService {
     let igvTotal = 0;
 
     const itemsCalc = dto.items.map((item) => {
-      const product = productMap.get(item.productId)!;
-      const precio  = item.precioUnitario;
-      const desc    = item.descuento ?? 0;
+      const precio = item.precioUnitario;
+      const desc   = item.descuento ?? 0;
       const itemSubtotal = (precio - desc) * item.cantidad;
 
       let igvMonto = 0;
-      if (product.igvTipo === 'gravado') {
-        igvMonto = itemSubtotal * IGV_RATE;
+      if (item.productId) {
+        const product = productMap.get(item.productId)!;
+        if (product.igvTipo === 'gravado') igvMonto = itemSubtotal * IGV_RATE;
       }
+      // Free-form items tratados como exonerados (sin IGV)
 
-      subtotal      += itemSubtotal;
+      subtotal       += itemSubtotal;
       descuentoTotal += desc * item.cantidad;
-      igvTotal      += igvMonto;
+      igvTotal       += igvMonto;
 
       return {
-        productId: item.productId,
-        cantidad: item.cantidad,
+        productId:      item.productId ?? null,
+        descripcion:    item.descripcion ?? null,
+        cantidad:       item.cantidad,
         precioUnitario: precio,
-        descuento: desc,
-        subtotal: itemSubtotal,
+        descuento:      desc,
+        subtotal:       itemSubtotal,
         igvMonto,
-        total: itemSubtotal + igvMonto,
+        total:          itemSubtotal + igvMonto,
       };
     });
 
     const total = subtotal + igvTotal;
 
-    // 3. Validar stock
-    for (const item of dto.items) {
-      const product = productMap.get(item.productId)!;
+    // 3. Validar stock solo para items de catálogo
+    for (const item of catalogItems) {
+      const product = productMap.get(item.productId!)!;
       if (Number(product.stockActual) < item.cantidad) {
         throw new BadRequestException(
           `Stock insuficiente para "${product.nombre}". Disponible: ${product.stockActual}, solicitado: ${item.cantidad}`,
@@ -160,15 +172,49 @@ export class SalesService {
     const saldoPendiente = Math.max(0, total - totalPagado);
     const montoPagado    = Math.min(totalPagado, total);
 
-    // 5. Crear venta en transacción
+    // 5. Buscar sesión de caja activa (si el frontend no la pasó, auto-detectar)
+    let effectiveCashSessionId = dto.cashSessionId ?? null;
+    if (!effectiveCashSessionId) {
+      const activeSession = await this.prisma.cashSession.findFirst({
+        where: { businessId, userId, estado: 'abierta' },
+        select: { id: true },
+      });
+      effectiveCashSessionId = activeSession?.id ?? null;
+    }
+
+    // 6. Crear venta + descontar stock en una sola transacción (previene race conditions)
     const sale = await this.prisma.$transaction(async (tx) => {
-      // Crear cabecera de venta
+      // 6a. Descuento atómico de stock: el WHERE stockActual >= cantidad garantiza
+      //     que si dos requests concurrentes llegan con el último item, solo una gana.
+      for (const item of catalogItems) {
+        const productName = productMap.get(item.productId!)?.nombre ?? item.productId;
+        try {
+          await tx.product.update({
+            where: {
+              id: item.productId!,
+              businessId,
+              stockActual: { gte: item.cantidad },
+            },
+            data: { stockActual: { decrement: item.cantidad } },
+            select: { id: true },
+          });
+        } catch (e: any) {
+          if (e?.code === 'P2025') {
+            throw new BadRequestException(
+              `Stock insuficiente para "${productName}". Intente de nuevo.`,
+            );
+          }
+          throw e;
+        }
+      }
+
+      // 6b. Crear cabecera de venta
       const newSale = await tx.sale.create({
         data: {
           businessId,
           userId,
           customerId: dto.customerId ?? null,
-          cashSessionId: dto.cashSessionId ?? null,
+          cashSessionId: effectiveCashSessionId,
           tipoVenta: (dto.tipoVenta as any) ?? 'contado',
           estado: saldoPendiente > 0 ? 'pendiente_pago' : 'activa',
           fecha: new Date(),
@@ -198,13 +244,34 @@ export class SalesService {
         },
       });
 
-      // Registrar movimiento de caja si hay sesión abierta
-      if (dto.cashSessionId && montoPagado > 0) {
+      // 6c. Registrar movimientos de inventario dentro de la misma transacción
+      for (const item of catalogItems) {
+        const product = productMap.get(item.productId!)!;
+        const stockAnterior = Number(product.stockActual);
+        const stockNuevo    = stockAnterior - item.cantidad;
+        await tx.inventoryMovement.create({
+          data: {
+            businessId,
+            productId:      item.productId!,
+            userId,
+            tipo:           'salida_venta',
+            cantidad:       item.cantidad,
+            stockAnterior,
+            stockNuevo,
+            referenciaId:   newSale.id,
+            referenciaTipo: 'sale',
+            fecha:          new Date(),
+          },
+        });
+      }
+
+      // 6d. Movimiento de caja si hay sesión abierta
+      if (effectiveCashSessionId && montoPagado > 0) {
         const effectivePayment = dto.payments.find((p) => p.monto > 0);
         if (effectivePayment) {
           await tx.cashMovement.create({
             data: {
-              cashSessionId: dto.cashSessionId,
+              cashSessionId: effectiveCashSessionId,
               userId,
               paymentMethodId: effectivePayment.paymentMethodId,
               saleId: newSale.id,
@@ -217,7 +284,7 @@ export class SalesService {
         }
       }
 
-      // Actualizar crédito usado del cliente si es venta a crédito
+      // 6e. Actualizar crédito usado del cliente si es venta a crédito
       if (dto.customerId && dto.tipoVenta === 'credito' && saldoPendiente > 0) {
         await tx.customer.update({
           where: { id: dto.customerId },
@@ -226,26 +293,24 @@ export class SalesService {
       }
 
       return newSale;
-    });
-
-    // 6. Descontar stock (fuera de la transacción principal para no bloquear)
-    for (const item of dto.items) {
-      await this.inventoryService.registerMovement({
-        businessId,
-        productId: item.productId,
-        userId,
-        tipo: 'salida_venta',
-        cantidad: item.cantidad,
-        referenciaId: sale.id,
-        referenciaTipo: 'sale',
-      });
-    }
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead });
 
     this.logger.log(`Venta creada: ${sale.id} | Total: S/ ${total.toFixed(2)} | Usuario: ${userId}`);
+
+    // 7. Emitir comprobante automáticamente si se solicitó
+    let comprobante: any = null;
+    if (dto.emitirComprobante && dto.tipoComprobante) {
+      try {
+        comprobante = await this.documentsService.createFromSale(sale.id, dto.tipoComprobante, businessId);
+      } catch (err: any) {
+        this.logger.warn(`Error al emitir comprobante para venta ${sale.id}: ${err?.message}`);
+      }
+    }
 
     return {
       ...sale,
       vuelto: Math.max(0, totalPagado - total),
+      ...(comprobante && { comprobante }),
     };
   }
 
@@ -255,6 +320,7 @@ export class SalesService {
     const { from, to, customerId, userId, estado, page = 1, limit = 50 } = query;
     const skip = (page - 1) * limit;
 
+    const { search } = query;
     const where: Prisma.SaleWhereInput = {
       businessId,
       ...(estado && { estado: estado as any }),
@@ -265,6 +331,20 @@ export class SalesService {
           ...(from && { gte: new Date(from) }),
           ...(to && { lte: new Date(to + 'T23:59:59Z') }),
         },
+      }),
+      ...(search && {
+        OR: [
+          {
+            electronicDocuments: {
+              some: { numeroCompleto: { contains: search, mode: 'insensitive' } },
+            },
+          },
+          {
+            customer: {
+              nombreCompleto: { contains: search, mode: 'insensitive' },
+            },
+          },
+        ],
       }),
     };
 
@@ -349,8 +429,9 @@ export class SalesService {
       });
     });
 
-    // Revertir stock (devolucion)
+    // Revertir stock solo para items con producto de catálogo
     for (const item of sale.items) {
+      if (!item.productId) continue;
       await this.inventoryService.registerMovement({
         businessId,
         productId: item.productId,
@@ -404,7 +485,7 @@ export class SalesService {
       }),
     ]);
 
-    const productIds = topProducts.map((t) => t.productId);
+    const productIds = topProducts.map((t) => t.productId).filter((id): id is string => id !== null);
     const products = await this.prisma.product.findMany({
       where: { id: { in: productIds } },
       select: { id: true, nombre: true, codigoInterno: true },
@@ -419,7 +500,7 @@ export class SalesService {
       ticketPromedio: Number(agg._avg.total ?? 0),
       cantidadTransacciones: count,
       topProductos: topProducts.map((t) => ({
-        ...productMap.get(t.productId),
+        ...(t.productId ? productMap.get(t.productId) : {}),
         totalVendido: Number(t._sum.cantidad ?? 0),
         totalIngresos: Number(t._sum.total ?? 0),
       })),
@@ -431,7 +512,7 @@ export class SalesService {
   async registerCreditPayment(
     id: string,
     dto: { monto: number; paymentMethodId: string; referencia?: string },
-    userId: string,
+    _userId: string,
     businessId: string,
   ) {
     const sale = await this.prisma.sale.findFirst({
@@ -500,32 +581,93 @@ export class SalesService {
     if (!sale) throw new NotFoundException('Venta no encontrada');
     if (sale.estado === 'anulada') throw new BadRequestException('No se puede devolver una venta anulada');
 
-    // Validar items
+    // Consultar cantidades ya devueltas previamente (por item de catálogo)
+    const prevReturns = await this.prisma.inventoryMovement.findMany({
+      where: { referenciaId: id, referenciaTipo: 'sale_return', tipo: 'devolucion', businessId },
+      select: { productId: true, cantidad: true },
+    });
+    const returnedByProduct: Record<string, number> = {};
+    for (const m of prevReturns) {
+      returnedByProduct[m.productId] = (returnedByProduct[m.productId] ?? 0) + Number(m.cantidad);
+    }
+
+    // Validar items — incluye protección contra devoluciones duplicadas
+    let montoDevolucion = 0;
     for (const ret of dto.items) {
       const saleItem = sale.items.find((i) => i.id === ret.saleItemId);
       if (!saleItem) throw new BadRequestException(`Item ${ret.saleItemId} no pertenece a esta venta`);
-      if (ret.cantidad <= 0 || ret.cantidad > Number(saleItem.cantidad)) {
-        throw new BadRequestException(`Cantidad inválida para "${saleItem.product.nombre}"`);
+      const nombre = saleItem.product?.nombre ?? saleItem.descripcion ?? 'ítem';
+      if (ret.cantidad <= 0) throw new BadRequestException(`Cantidad inválida para "${nombre}"`);
+
+      const originalQty = Number(saleItem.cantidad);
+      const alreadyReturned = saleItem.productId ? (returnedByProduct[saleItem.productId] ?? 0) : 0;
+      if (alreadyReturned + ret.cantidad > originalQty) {
+        const disponible = originalQty - alreadyReturned;
+        throw new BadRequestException(
+          `"${nombre}": solo quedan ${disponible} unidad(es) disponibles para devolver (ya se devolvieron ${alreadyReturned})`,
+        );
       }
+      montoDevolucion += Number(saleItem.precioUnitario) * ret.cantidad;
     }
 
-    // Devolver stock
-    for (const ret of dto.items) {
-      const saleItem = sale.items.find((i) => i.id === ret.saleItemId)!;
-      await this.inventoryService.registerMovement({
-        businessId,
-        productId: saleItem.productId,
-        userId,
-        tipo: 'devolucion',
-        cantidad: ret.cantidad,
-        referenciaId: sale.id,
-        referenciaTipo: 'sale_return',
-        observaciones: `Devolución: ${dto.motivo}`,
+    // Buscar sesión de caja activa del usuario para registrar egreso
+    const cashSession = await this.prisma.cashSession.findFirst({
+      where: { businessId, userId, estado: 'abierta' },
+    });
+
+    await this.prisma.$transaction(async (tx) => {
+      // Registrar movimientos de inventario (restaurar stock)
+      for (const ret of dto.items) {
+        const saleItem = sale.items.find((i) => i.id === ret.saleItemId)!;
+        if (!saleItem.productId) continue;
+        await this.inventoryService.registerMovement({
+          businessId,
+          productId: saleItem.productId,
+          userId,
+          tipo: 'devolucion',
+          cantidad: ret.cantidad,
+          referenciaId: sale.id,
+          referenciaTipo: 'sale_return',
+          observaciones: `Devolución: ${dto.motivo}`,
+        });
+      }
+
+      // Registrar egreso en caja si hay sesión abierta
+      if (cashSession && montoDevolucion > 0) {
+        await tx.cashMovement.create({
+          data: {
+            cashSessionId: cashSession.id,
+            userId,
+            saleId: sale.id,
+            tipo: 'egreso',
+            concepto: `Devolución venta — ${dto.motivo}`,
+            monto: montoDevolucion,
+            fecha: new Date(),
+          },
+        });
+      }
+
+      // Auditoría
+      await tx.auditLog.create({
+        data: {
+          businessId,
+          userId,
+          modulo: 'ventas',
+          accion: 'devolucion',
+          entidad: 'sale',
+          entidadId: sale.id,
+          datosNuevos: { items: dto.items, motivo: dto.motivo, montoDevolucion },
+        },
       });
-    }
+    });
 
-    this.logger.log(`Devolución procesada para venta ${id} por usuario ${userId}`);
-    return { message: 'Devolución registrada y stock actualizado', saleId: id };
+    this.logger.log(`Devolución procesada para venta ${id} — monto S/.${montoDevolucion.toFixed(2)} — caja: ${cashSession ? 'sí' : 'sin sesión activa'}`);
+    return {
+      message: 'Devolución registrada y stock actualizado',
+      saleId: id,
+      montoDevolucion,
+      cajaActualizada: !!cashSession,
+    };
   }
 
   // ── VENTAS PENDIENTES DE COBRO ───────────────────────────────────────────

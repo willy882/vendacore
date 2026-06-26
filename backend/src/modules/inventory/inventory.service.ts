@@ -12,7 +12,57 @@ export class InventoryService {
 
   constructor(private prisma: PrismaService) {}
 
-  // ── KARDEX ───────────────────────────────────────────────────────────────
+  // ── KARDEX GLOBAL (todos los productos) ──────────────────────────────────
+
+  async getGlobalKardex(
+    query: QueryKardexDto & { search?: string },
+    businessId: string,
+  ) {
+    const page  = Number(query.page)  || 1;
+    const limit = Number(query.limit) || 50;
+    const { from, to, tipo, search } = query;
+    const skip = (page - 1) * limit;
+
+    const where: Prisma.InventoryMovementWhereInput = {
+      businessId,
+      ...(tipo && { tipo: tipo as any }),
+      ...(from || to
+        ? {
+            fecha: {
+              ...(from && { gte: new Date(from) }),
+              ...(to && { lte: new Date(to + 'T23:59:59Z') }),
+            },
+          }
+        : {}),
+      ...(search
+        ? { product: { nombre: { contains: search, mode: 'insensitive' } } }
+        : {}),
+    };
+
+    const [movements, total] = await Promise.all([
+      this.prisma.inventoryMovement.findMany({
+        where,
+        include: {
+          product: { select: { id: true, nombre: true, codigoInterno: true } },
+          user:    { select: { id: true, nombre: true, apellido: true } },
+        },
+        orderBy: { fecha: 'desc' },
+        skip,
+        take: limit,
+      }),
+      this.prisma.inventoryMovement.count({ where }),
+    ]);
+
+    return {
+      data: movements,
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit),
+    };
+  }
+
+  // ── KARDEX (por producto) ─────────────────────────────────────────────────
 
   async getKardex(productId: string, query: QueryKardexDto, businessId: string) {
     const { from, to, tipo, page = 1, limit = 50 } = query;
@@ -197,8 +247,8 @@ export class InventoryService {
       observaciones?: string;
     },
   ) {
-    const product = await this.prisma.product.findUnique({
-      where: { id: data.productId },
+    const product = await this.prisma.product.findFirst({
+      where: { id: data.productId, businessId: data.businessId },
     });
     if (!product) throw new NotFoundException(`Producto ${data.productId} no encontrado`);
 

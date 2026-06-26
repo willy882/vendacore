@@ -880,4 +880,315 @@ export class ReportsService {
     res.setHeader('Content-Length', buf.length);
     res.end(buf);
   }
+
+  // ── PLE: Registro de Ventas (14.1) ──────────────────────────────────────
+
+  async getPleVentas(businessId: string, year: number, month: number) {
+    const from    = new Date(year, month - 1, 1);
+    const to      = new Date(year, month, 0, 23, 59, 59);
+    const periodo = `${year}${String(month).padStart(2, '0')}00`;
+
+    const TIPO_DOC: Record<string, string> = { DNI: '1', RUC: '6', CE: '4', PASAPORTE: '7' };
+    const TIPO_COMP: Record<string, string> = { factura: '01', boleta: '03', nota_credito: '07', nota_debito: '08' };
+
+    const sales = await this.prisma.sale.findMany({
+      where:   { businessId, fecha: { gte: from, lte: to } },
+      include: {
+        customer: { select: { tipoDocumento: true, numeroDocumento: true, nombreCompleto: true, razonSocial: true } },
+        electronicDocuments: {
+          select: { tipo: true, serie: true, correlativo: true, numeroCompleto: true, estado: true },
+          orderBy: { createdAt: 'asc' },
+        },
+      },
+      orderBy: { fecha: 'asc' },
+    });
+
+    const rows: Record<string, string>[] = [];
+    let cuo = 1;
+
+    for (const sale of sales) {
+      const doc      = sale.electronicDocuments[0];
+      const fechaStr = new Date(sale.fecha).toLocaleDateString('es-PE', { day:'2-digit', month:'2-digit', year:'numeric' });
+      const isAnulada = sale.estado === 'anulada';
+
+      if (doc) {
+        const parts   = (doc.numeroCompleto ?? '').split('-');
+        const serie   = parts[0] ?? '';
+        const numero  = parts[1] ?? String(doc.correlativo ?? '');
+        const tipoComp = TIPO_COMP[doc.tipo] ?? '00';
+        const tipoDocCliente = sale.customer?.tipoDocumento ? TIPO_DOC[sale.customer.tipoDocumento] : '0';
+        const numDocCliente  = sale.customer?.numeroDocumento ?? '-';
+        const nombre = (sale.customer?.razonSocial ?? sale.customer?.nombreCompleto ?? 'CONSUMIDOR FINAL').slice(0, 100);
+
+        rows.push({
+          periodo, cuo: `M-${cuo++}`, correlativoAsiento: `M-${cuo - 1}`,
+          fechaEmision: fechaStr, fechaVencimiento: fechaStr,
+          tipoComprobante: tipoComp, serie, numero,
+          tipoDocIdentidad: tipoDocCliente, numDocIdentidad: numDocCliente, nombre,
+          exportacion: '0.00',
+          baseGravada: fmt(Number(sale.subtotal ?? 0)),
+          descuento: '0.00',
+          igv: fmt(Number(sale.igv ?? 0)),
+          baseInafecta: '0.00', baseExonerada: '0.00',
+          isc: '0.00', icbper: '0.00', ivap: '0.00', otrosTributos: '0.00',
+          total: fmt(Number(sale.total)),
+          tipoCambio: '1.000',
+          fechaCompRef: '', tipoCompRef: '', serieRef: '', numeroRef: '',
+          estado: isAnulada ? '9' : '1',
+        });
+      } else {
+        // Ticket sin comprobante electrónico → boleta interna código 03
+        const nombre = (sale.customer?.razonSocial ?? sale.customer?.nombreCompleto ?? 'CONSUMIDOR FINAL').slice(0, 100);
+        rows.push({
+          periodo, cuo: `M-${cuo++}`, correlativoAsiento: `M-${cuo - 1}`,
+          fechaEmision: fechaStr, fechaVencimiento: fechaStr,
+          tipoComprobante: '03', serie: 'T001', numero: sale.id.slice(-8).toUpperCase(),
+          tipoDocIdentidad: sale.customer?.tipoDocumento ? TIPO_DOC[sale.customer.tipoDocumento] : '0',
+          numDocIdentidad: sale.customer?.numeroDocumento ?? '-', nombre,
+          exportacion: '0.00',
+          baseGravada: fmt(Number(sale.subtotal ?? 0)),
+          descuento: '0.00',
+          igv: fmt(Number(sale.igv ?? 0)),
+          baseInafecta: '0.00', baseExonerada: '0.00',
+          isc: '0.00', icbper: '0.00', ivap: '0.00', otrosTributos: '0.00',
+          total: fmt(Number(sale.total)),
+          tipoCambio: '1.000',
+          fechaCompRef: '', tipoCompRef: '', serieRef: '', numeroRef: '',
+          estado: isAnulada ? '9' : '1',
+        });
+      }
+    }
+
+    const totales = {
+      ventas:   rows.length,
+      total:    sales.reduce((a, s) => a + Number(s.total), 0),
+      igv:      sales.reduce((a, s) => a + Number(s.igv ?? 0), 0),
+      subtotal: sales.reduce((a, s) => a + Number(s.subtotal ?? 0), 0),
+    };
+    return { periodo, year, month, rows, totales };
+  }
+
+  // ── PLE: Registro de Compras (8.1) ───────────────────────────────────────
+
+  async getPleCompras(businessId: string, year: number, month: number) {
+    const from    = new Date(year, month - 1, 1);
+    const to      = new Date(year, month, 0, 23, 59, 59);
+    const periodo = `${year}${String(month).padStart(2, '0')}00`;
+
+    const TIPO_COMP: Record<string, string> = {
+      FACTURA: '01', BOLETA: '03', TICKET: '03', RECIBO: '00',
+      'NOTA DE CREDITO': '07', 'NOTA DE DEBITO': '08',
+    };
+
+    const purchases = await this.prisma.purchase.findMany({
+      where:   { businessId, fecha: { gte: from, lte: to } },
+      include: { supplier: { select: { ruc: true, razonSocial: true } } },
+      orderBy: { fecha: 'asc' },
+    });
+
+    const rows = purchases.map((p, i) => {
+      const tipoDoc    = (p.tipoDocumento ?? '').toUpperCase();
+      const tipoComp   = TIPO_COMP[tipoDoc] ?? '00';
+      const numDoc     = p.numeroDocumento ?? '';
+      const hasDash    = numDoc.includes('-');
+      const serie      = hasDash ? numDoc.split('-')[0] : '';
+      const numero     = hasDash ? numDoc.split('-').slice(1).join('-') : numDoc;
+      const fechaStr   = new Date(p.fecha).toLocaleDateString('es-PE', { day:'2-digit', month:'2-digit', year:'numeric' });
+
+      return {
+        periodo, cuo: `M-${i + 1}`, correlativoAsiento: `M-${i + 1}`,
+        fechaEmision: fechaStr, fechaVencimiento: fechaStr,
+        tipoComprobante: tipoComp, serie, anio: '', numero,
+        tipoDocProveedor: '6',
+        numDocProveedor: p.supplier?.ruc ?? '-',
+        nombreProveedor: (p.supplier?.razonSocial ?? '').slice(0, 100),
+        baseGravada: fmt(Number(p.subtotal ?? 0)),
+        igv: fmt(Number(p.igv ?? 0)),
+        baseNoGravada: '0.00', igvNoGravado: '0.00',
+        baseInafecta: '0.00', isc: '0.00', icbper: '0.00', ivap: '0.00', otrosTributos: '0.00',
+        total: fmt(Number(p.total)),
+        moneda: 'PEN', tipoCambio: '1.000',
+        fechaCompRef: '', tipoCompRef: '', numeroRef: '',
+        estado: '1',
+      };
+    });
+
+    const totales = {
+      compras:  rows.length,
+      total:    purchases.reduce((a, p) => a + Number(p.total), 0),
+      igv:      purchases.reduce((a, p) => a + Number(p.igv ?? 0), 0),
+      subtotal: purchases.reduce((a, p) => a + Number(p.subtotal ?? 0), 0),
+    };
+    return { periodo, year, month, rows, totales };
+  }
+
+  // ── Ventas anuales (12 meses) ────────────────────────────────────────────
+
+  async getVentasAnuales(businessId: string, year: number) {
+    const MESES = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Set','Oct','Nov','Dic'];
+    const meses = await Promise.all(
+      Array.from({ length: 12 }, async (_, i) => {
+        const from = new Date(year, i, 1);
+        const to   = new Date(year, i + 1, 0, 23, 59, 59);
+        const agg  = await this.prisma.sale.aggregate({
+          where: { businessId, fecha: { gte: from, lte: to }, estado: { not: 'anulada' } },
+          _sum:   { total: true, igv: true, subtotal: true },
+          _count: { id: true },
+        });
+        return {
+          mes:      i + 1,
+          mesNombre: MESES[i],
+          ventas:   agg._count.id,
+          subtotal: Number(agg._sum.subtotal ?? 0),
+          igv:      Number(agg._sum.igv ?? 0),
+          total:    Number(agg._sum.total ?? 0),
+        };
+      }),
+    );
+    const totalAnual = meses.reduce((a, m) => a + m.total, 0);
+    return { year, meses, totalAnual };
+  }
+
+  // ── REPORTE VENTAS POR USUARIO ───────────────────────────────────────────
+
+  async getVentasPorUsuario(
+    businessId: string,
+    from: Date,
+    to: Date,
+    userId?: string,
+  ) {
+    const sales = await this.prisma.sale.findMany({
+      where: {
+        businessId,
+        fecha: { gte: from, lte: to },
+        ...(userId && userId !== 'todos' ? { userId } : {}),
+      },
+      include: {
+        customer: { select: { nombreCompleto: true, numeroDocumento: true } },
+        user:     { select: { id: true, nombre: true, apellido: true } },
+        electronicDocuments: {
+          select: { numeroCompleto: true, tipo: true },
+          orderBy: { createdAt: 'asc' },
+          take: 1,
+        },
+      },
+      orderBy: { fecha: 'desc' },
+    });
+
+    // Lista de usuarios únicos para el filtro
+    const usuariosMap = new Map<string, { id: string; nombre: string; apellido: string }>();
+    for (const s of sales) {
+      if (s.user && !usuariosMap.has(s.user.id)) {
+        usuariosMap.set(s.user.id, s.user);
+      }
+    }
+
+    const data = sales.map((s) => ({
+      id:           s.id,
+      fecha:        s.fecha,
+      estado:       s.estado,
+      total:        Number(s.total),
+      comprobante:  s.electronicDocuments[0]?.numeroCompleto ?? null,
+      tipoDoc:      s.electronicDocuments[0]?.tipo ?? null,
+      cliente:      s.customer?.nombreCompleto ?? 'Consumidor Final',
+      responsable:  s.user ? `${s.user.nombre} ${s.user.apellido}` : '—',
+      responsableId: s.userId,
+    }));
+
+    // Los totales excluyen anuladas — solo se cuentan ventas efectivas
+    const efectivas = data.filter((d) => d.estado !== 'anulada');
+    const sumaEfectivas = efectivas.reduce((a, d) => a + d.total, 0);
+    const totales = {
+      total:        sumaEfectivas,
+      comprobantes: efectivas.length,
+      promedio:     efectivas.length > 0 ? sumaEfectivas / efectivas.length : 0,
+    };
+
+    return { data, totales, usuarios: Array.from(usuariosMap.values()) };
+  }
+
+  // ── REPORTE PRODUCTOS VENDIDOS ────────────────────────────────────────────
+
+  async getProductosVendidos(
+    businessId: string,
+    from: Date,
+    to: Date,
+    search?: string,
+  ) {
+    // Traer ítems de ventas activas en el rango
+    const items = await this.prisma.saleItem.findMany({
+      where: {
+        sale: {
+          businessId,
+          estado: 'activa',
+          fecha: { gte: from, lte: to },
+        },
+      },
+      include: {
+        product: {
+          select: {
+            id: true,
+            nombre: true,
+            codigoInterno: true,
+            precioCompra: true,
+            unidadMedida: true,
+          },
+        },
+      },
+    });
+
+    // Agrupar por producto
+    type Entry = {
+      productId: string | null;
+      nombre: string;
+      codigoInterno: string | null;
+      unidadMedida: string | null;
+      costoUnitario: number;
+      cantidad: number;
+      totalVenta: number;
+    };
+
+    const map = new Map<string, Entry>();
+
+    for (const item of items) {
+      const key = item.productId ?? `desc:${item.descripcion}`;
+      const nombre = item.product?.nombre ?? item.descripcion ?? 'Sin nombre';
+
+      // Filtro de búsqueda
+      if (search && !nombre.toLowerCase().includes(search.toLowerCase())) continue;
+
+      if (!map.has(key)) {
+        map.set(key, {
+          productId: item.productId ?? null,
+          nombre,
+          codigoInterno: item.product?.codigoInterno ?? null,
+          unidadMedida: item.product?.unidadMedida ?? 'UNIDAD',
+          costoUnitario: Number(item.product?.precioCompra ?? 0),
+          cantidad: 0,
+          totalVenta: 0,
+        });
+      }
+
+      const entry = map.get(key)!;
+      entry.cantidad  += Number(item.cantidad);
+      entry.totalVenta += Number(item.total);
+    }
+
+    const data = Array.from(map.values())
+      .map((e) => ({
+        ...e,
+        precioPromedio: e.cantidad > 0 ? e.totalVenta / e.cantidad : 0,
+        utilidad: e.totalVenta - e.cantidad * e.costoUnitario,
+      }))
+      .sort((a, b) => b.cantidad - a.cantidad);
+
+    const totales = {
+      totalVenta: data.reduce((s, d) => s + d.totalVenta, 0),
+      utilidad:   data.reduce((s, d) => s + d.utilidad, 0),
+      productos:  data.length,
+      unidades:   data.reduce((s, d) => s + d.cantidad, 0),
+    };
+
+    return { data, totales };
+  }
 }

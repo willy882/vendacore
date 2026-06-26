@@ -90,7 +90,7 @@ function PurchaseModal({ open, onClose }: { open: boolean; onClose: () => void }
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['purchases'] });
-      qc.invalidateQueries({ queryKey: ['products'] });
+      qc.refetchQueries({ queryKey: ['products'] });
       clearPersisted();
       reset();
       onClose();

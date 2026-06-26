@@ -35,7 +35,10 @@ export const useAuthStore = create<AuthState>()(
 
       hasRole: (role) => get().user?.role?.name === role,
 
-      hasRoles: (roles) => roles.includes(get().user?.role?.name ?? ''),
+      hasRoles: (roles) => {
+        const name = get().user?.role?.name ?? '';
+        return name === 'super_admin' || roles.includes(name);
+      },
     }),
     {
       name: 'vendacore-auth',

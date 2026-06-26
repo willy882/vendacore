@@ -18,6 +18,9 @@ export class RolesGuard implements CanActivate {
 
     if (!user) throw new ForbiddenException('Sin autenticación');
 
+    // super_admin tiene acceso irrestricto a todas las rutas
+    if (user.role?.name === 'super_admin') return true;
+
     const hasRole = requiredRoles.includes(user.role?.name);
     if (!hasRole) {
       throw new ForbiddenException(

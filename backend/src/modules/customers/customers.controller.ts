@@ -23,9 +23,33 @@ export class CustomersController {
     return this.service.getDeudores(user.businessId);
   }
 
+  @Get('stats')
+  getStats(@CurrentUser() user: any) {
+    return this.service.getStats(user.businessId);
+  }
+
+  @Get('lookup')
+  lookup(
+    @CurrentUser() user: any,
+    @Query('tipo')   tipo:   string,
+    @Query('numero') numero: string,
+  ) {
+    return this.service.lookupDocument(tipo, numero, user.businessId);
+  }
+
   @Get()
-  findAll(@CurrentUser() user: any, @Query('search') search?: string) {
-    return this.service.findAll(user.businessId, search);
+  findAll(
+    @CurrentUser() user: any,
+    @Query('search') search?: string,
+    @Query('page')  page?:   string,
+    @Query('limit') limit?:  string,
+  ) {
+    return this.service.findAll(
+      user.businessId,
+      search,
+      page  ? parseInt(page,  10) : 1,
+      limit ? parseInt(limit, 10) : 10,
+    );
   }
 
   @Get(':id')
@@ -36,6 +60,12 @@ export class CustomersController {
   @Post()
   create(@Body() dto: CreateCustomerDto, @CurrentUser() user: any) {
     return this.service.create(dto, user.businessId);
+  }
+
+  /** Crea el cliente si no existe; si ya hay uno con ese número de documento, lo devuelve. */
+  @Post('upsert')
+  upsert(@Body() dto: CreateCustomerDto, @CurrentUser() user: any) {
+    return this.service.upsert(dto, user.businessId);
   }
 
   @Put(':id')

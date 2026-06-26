@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
-import { Plus, Pencil, ToggleLeft, ToggleRight, Shield, Users } from 'lucide-react';
+import { Plus, Pencil, ToggleLeft, ToggleRight, Shield, Users, Trash2 } from 'lucide-react';
 import { usersService } from '@/services/users.service';
 import { Card, CardHeader, CardTitle } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
@@ -12,7 +12,6 @@ import { Select } from '@/components/ui/Select';
 import { Badge } from '@/components/ui/Badge';
 import { Modal } from '@/components/ui/Modal';
 import { Spinner } from '@/components/ui/Spinner';
-import {} from '@/lib/utils';
 import type { User } from '@/types';
 import { useAuthStore } from '@/stores/auth.store';
 
@@ -39,22 +38,23 @@ const createSchema = z.object({
 });
 
 const editSchema = z.object({
-  nombre:   z.string().min(2, 'Requerido'),
-  apellido: z.string().min(2, 'Requerido'),
-  email:    z.string().email('Email inválido'),
-  roleId:   z.string().min(1, 'Seleccione un rol'),
+  nombre:      z.string().min(2, 'Requerido'),
+  apellido:    z.string().min(2, 'Requerido'),
+  email:       z.string().email('Email inválido'),
+  roleId:      z.string().min(1, 'Seleccione un rol'),
+  newPassword: z.string().min(8, 'Mínimo 8 caracteres').optional().or(z.literal('')),
 });
 
 type CreateForm = z.infer<typeof createSchema>;
 type EditForm   = z.infer<typeof editSchema>;
 
-// ── Modal ─────────────────────────────────────────────────────────────────────
+// ── Modal crear / editar ──────────────────────────────────────────────────────
 
 function UserModal({ open, onClose, user, roles }: {
-  open:   boolean;
+  open:    boolean;
   onClose: () => void;
-  user?:  User | null;
-  roles:  { id: string; name: string }[];
+  user?:   User | null;
+  roles:   { id: string; name: string }[];
 }) {
   const qc     = useQueryClient();
   const isEdit = !!user;
@@ -66,17 +66,24 @@ function UserModal({ open, onClose, user, roles }: {
     useForm<EditForm>({
       resolver: zodResolver(editSchema),
       defaultValues: user ? {
-        nombre:   user.nombre,
-        apellido: user.apellido,
-        email:    user.email,
-        roleId:   user.role?.id ?? '',
+        nombre:      user.nombre,
+        apellido:    user.apellido,
+        email:       user.email,
+        roleId:      user.role?.id ?? '',
+        newPassword: '',
       } : undefined,
     });
 
   const saveMut = useMutation({
-    mutationFn: (payload: Omit<CreateForm, 'password'> & { password?: string }) =>
+    mutationFn: (payload: any) =>
       isEdit
-        ? usersService.update(user!.id, { nombre: payload.nombre, apellido: payload.apellido, email: payload.email, roleId: payload.roleId })
+        ? usersService.update(user!.id, {
+            nombre:      payload.nombre,
+            apellido:    payload.apellido,
+            email:       payload.email,
+            roleId:      payload.roleId,
+            ...(payload.newPassword ? { newPassword: payload.newPassword } : {}),
+          })
         : usersService.create(payload as CreateForm),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['users'] });
@@ -86,7 +93,12 @@ function UserModal({ open, onClose, user, roles }: {
   });
 
   const handleClose = () => { resetCreate(); resetEdit(); onClose(); };
-  const roleOptions = roles.map((r) => ({ value: r.id, label: r.name }));
+
+  // Filtrar super_admin de la lista visible
+  const roleOptions = roles
+    .filter((r) => r.name !== 'super_admin')
+    .map((r) => ({ value: r.id, label: r.name }));
+
   const err = (saveMut.error as any)?.response?.data?.message;
 
   return (
@@ -124,6 +136,13 @@ function UserModal({ open, onClose, user, roles }: {
             </div>
             <Input label="Email *" type="email" {...regEdit('email')} error={errEdit.email?.message} />
             <Select label="Rol *" options={roleOptions} placeholder="— Seleccione —" {...regEdit('roleId')} error={errEdit.roleId?.message} />
+            <Input
+              label="Nueva contraseña (dejar en blanco para no cambiar)"
+              type="password"
+              placeholder="Mínimo 8 caracteres"
+              {...regEdit('newPassword')}
+              error={errEdit.newPassword?.message}
+            />
           </>
         ) : (
           <>
@@ -141,13 +160,45 @@ function UserModal({ open, onClose, user, roles }: {
   );
 }
 
+// ── Modal confirmar eliminación ───────────────────────────────────────────────
+
+function DeleteUserModal({ user, onClose, onConfirm, loading }: {
+  user:      User;
+  onClose:   () => void;
+  onConfirm: () => void;
+  loading:   boolean;
+}) {
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      title="Eliminar usuario"
+      size="sm"
+      footer={
+        <>
+          <Button variant="outline" onClick={onClose}>Cancelar</Button>
+          <Button variant="danger" loading={loading} onClick={onConfirm}>
+            Eliminar
+          </Button>
+        </>
+      }
+    >
+      <p className="text-sm text-slate-600">
+        ¿Estás seguro de eliminar a <strong>{user.nombre} {user.apellido}</strong>?
+        Esta acción no se puede deshacer.
+      </p>
+    </Modal>
+  );
+}
+
 // ── Página ────────────────────────────────────────────────────────────────────
 
 export default function UsuariosPage() {
-  const qc         = useQueryClient();
+  const qc          = useQueryClient();
   const currentUser = useAuthStore((s) => s.user);
-  const [modal, setModal]     = useState(false);
-  const [editing, setEditing] = useState<User | null>(null);
+  const [modal, setModal]         = useState(false);
+  const [editing, setEditing]     = useState<User | null>(null);
+  const [deleting, setDeleting]   = useState<User | null>(null);
 
   const { data: users, isLoading } = useQuery({
     queryKey: ['users'],
@@ -165,8 +216,19 @@ export default function UsuariosPage() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['users'] }),
   });
 
+  const deleteMut = useMutation({
+    mutationFn: (id: string) => usersService.delete(id),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['users'] });
+      setDeleting(null);
+    },
+  });
+
   const allUsers = users ?? [];
   const active   = allUsers.filter((u) => u.isActive).length;
+
+  // Solo mostrar roles que no sean super_admin
+  const filteredRoles = (roles ?? []).filter((r) => r.name !== 'super_admin');
 
   return (
     <div className="space-y-5">
@@ -187,7 +249,7 @@ export default function UsuariosPage() {
       </div>
 
       {/* Roles disponibles */}
-      {roles && (
+      {filteredRoles.length > 0 && (
         <Card padding="md">
           <CardHeader>
             <div className="flex items-center gap-2">
@@ -196,7 +258,7 @@ export default function UsuariosPage() {
             </div>
           </CardHeader>
           <div className="flex flex-wrap gap-2">
-            {roles.map((r) => (
+            {filteredRoles.map((r) => (
               <div key={r.id} className="flex items-center gap-2 px-3 py-1.5 bg-slate-50 rounded-lg border border-slate-200">
                 <Badge variant={roleVariant(r.name)}>{r.name}</Badge>
                 <span className="text-xs text-slate-500">
@@ -252,25 +314,41 @@ export default function UsuariosPage() {
                     </td>
                     <td className="px-5 py-3">
                       <div className="flex items-center gap-1">
+                        {/* Editar (incluye cambio de contraseña) */}
                         <button
                           onClick={() => { setEditing(u); setModal(true); }}
                           className="p-1.5 rounded-lg hover:bg-amber-50 text-slate-400 hover:text-amber-600 transition-colors"
-                          title="Editar"
+                          title="Editar / cambiar contraseña"
                         >
                           <Pencil size={15} />
                         </button>
+
                         {!isCurrentUser && (
-                          <button
-                            onClick={() => toggleMut.mutate({ id: u.id, isActive: !u.isActive })}
-                            className={`p-1.5 rounded-lg transition-colors ${
-                              u.isActive
-                                ? 'hover:bg-red-50 text-slate-400 hover:text-red-500'
-                                : 'hover:bg-emerald-50 text-slate-400 hover:text-emerald-600'
-                            }`}
-                            title={u.isActive ? 'Desactivar' : 'Activar'}
-                          >
-                            {u.isActive ? <ToggleRight size={15} /> : <ToggleLeft size={15} />}
-                          </button>
+                          <>
+                            {/* Activar / desactivar */}
+                            <button
+                              onClick={() => toggleMut.mutate({ id: u.id, isActive: !u.isActive })}
+                              className={`p-1.5 rounded-lg transition-colors ${
+                                u.isActive
+                                  ? 'hover:bg-red-50 text-slate-400 hover:text-red-500'
+                                  : 'hover:bg-emerald-50 text-slate-400 hover:text-emerald-600'
+                              }`}
+                              title={u.isActive ? 'Desactivar' : 'Activar'}
+                            >
+                              {u.isActive ? <ToggleRight size={15} /> : <ToggleLeft size={15} />}
+                            </button>
+
+                            {/* Eliminar (solo cuando está inactivo) */}
+                            {!u.isActive && (
+                              <button
+                                onClick={() => setDeleting(u)}
+                                className="p-1.5 rounded-lg hover:bg-red-50 text-slate-400 hover:text-red-500 transition-colors"
+                                title="Eliminar usuario"
+                              >
+                                <Trash2 size={15} />
+                              </button>
+                            )}
+                          </>
                         )}
                       </div>
                     </td>
@@ -288,6 +366,15 @@ export default function UsuariosPage() {
         user={editing}
         roles={roles ?? []}
       />
+
+      {deleting && (
+        <DeleteUserModal
+          user={deleting}
+          onClose={() => setDeleting(null)}
+          onConfirm={() => deleteMut.mutate(deleting.id)}
+          loading={deleteMut.isPending}
+        />
+      )}
     </div>
   );
 }

@@ -14,6 +14,15 @@ export class ErrorBoundary extends Component<Props, State> {
   componentDidCatch(error: Error, info: { componentStack: string }) {
     console.error('[ErrorBoundary]', error, info.componentStack);
     this.setState((s) => ({ ...s, stack: (error.stack ?? '') + '\n---\n' + info.componentStack }));
+
+    // Chunk obsoleto por nuevo deploy → recarga automática (una sola vez)
+    const isChunkError = error.message.includes('Failed to fetch dynamically imported module')
+      || error.message.includes('Importing a module script failed')
+      || error.message.includes('Unable to preload CSS');
+    if (isChunkError && !sessionStorage.getItem('chunk_reload')) {
+      sessionStorage.setItem('chunk_reload', '1');
+      window.location.reload();
+    }
   }
 
   render() {

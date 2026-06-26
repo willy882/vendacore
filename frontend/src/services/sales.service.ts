@@ -11,7 +11,8 @@ export interface SaleFilters {
 }
 
 export interface SaleItemInput {
-  productId:      string;
+  productId?:     string;
+  descripcion?:   string;
   cantidad:       number;
   precioUnitario: number;
   descuento?:     number;
@@ -24,13 +25,14 @@ export interface SalePaymentInput {
 }
 
 export interface CreateSaleData {
-  customerId?:    string;
-  cashSessionId?: string;
-  tipoVenta:      'contado' | 'credito';
-  items:          SaleItemInput[];
-  payments:       SalePaymentInput[];
-  descuentoGlobal?: number;
-  observaciones?: string;
+  customerId?:        string;
+  cashSessionId?:     string;
+  tipoVenta:          'contado' | 'credito';
+  items:              SaleItemInput[];
+  payments:           SalePaymentInput[];
+  observaciones?:     string;
+  emitirComprobante?: boolean;
+  tipoComprobante?:   'boleta' | 'factura';
 }
 
 export const salesService = {

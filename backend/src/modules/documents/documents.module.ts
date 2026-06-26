@@ -6,5 +6,6 @@ import { SunatService } from './sunat.service';
 @Module({
   controllers: [DocumentsController],
   providers: [DocumentsService, SunatService],
+  exports: [DocumentsService],
 })
 export class DocumentsModule {}

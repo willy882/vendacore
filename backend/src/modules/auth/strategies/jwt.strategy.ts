@@ -8,7 +8,12 @@ export interface JwtPayload {
   email: string;
   businessId: string;
   roleId: string;
+  tokenVersion?: number;
 }
+
+// Caché en memoria: evita consultar la BD en cada request (TTL 60s)
+const userCache = new Map<string, { data: any; expiresAt: number }>();
+const CACHE_TTL_MS = 60_000;
 
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
@@ -20,7 +25,16 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
     });
   }
 
+  static invalidateCache(userId: string) {
+    userCache.delete(userId);
+  }
+
   async validate(payload: JwtPayload) {
+    const cached = userCache.get(payload.sub);
+    if (cached && cached.expiresAt > Date.now()) {
+      return cached.data;
+    }
+
     const user = await this.prisma.user.findUnique({
       where: { id: payload.sub },
       include: {
@@ -38,8 +52,8 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
       throw new UnauthorizedException('Usuario no encontrado o inactivo');
     }
 
-    // No devolver el hash de contraseña al request
     const { passwordHash: _, twoFactorSecret: __, ...safeUser } = user;
+    userCache.set(payload.sub, { data: safeUser, expiresAt: Date.now() + CACHE_TTL_MS });
     return safeUser;
   }
 }
