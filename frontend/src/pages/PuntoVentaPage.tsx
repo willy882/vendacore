@@ -1187,6 +1187,16 @@ export default function PuntoVentaPage() {
                   setSearch(e.target.value);
                   if (e.target.value) setView('products'); else if (!selectedCat) setView('categories');
                 }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && products.length === 1) {
+                    const p = products[0];
+                    if (Number(p.stockActual ?? 0) > 0) {
+                      addItem({ productId: p.id, descripcion: p.nombre, precio: Number(p.precioVenta), cantidad: 1, stock: p.stockActual });
+                      setSearch('');
+                      if (!selectedCat) setView('categories');
+                    }
+                  }
+                }}
                 className="flex-1 text-sm outline-none"
               />
               <Search size={18} className="text-blue-500 flex-shrink-0" />
