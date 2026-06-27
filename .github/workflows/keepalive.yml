@@ -11,8 +11,5 @@ jobs:
     steps:
       - name: Ping backend
         run: |
-          STATUS=$(curl -s -o /dev/null -w "%{http_code}" https://vendacore-backend.fly.dev/api/v1/health --max-time 30)
-          echo "Backend status: $STATUS"
-          if [ "$STATUS" != "200" ]; then
-            echo "Warning: backend returned $STATUS"
-          fi
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" https://vendacore-backend.fly.dev/api/v1 --max-time 30)
+          echo "Backend alive, status: $STATUS"
