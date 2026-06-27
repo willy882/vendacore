@@ -1,0 +1,18 @@
+name: Keep Backend Alive
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'  # cada 5 minutos
+  workflow_dispatch:        # también se puede lanzar manualmente
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping backend
+        run: |
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" https://vendacore-backend.fly.dev/api/v1/health --max-time 30)
+          echo "Backend status: $STATUS"
+          if [ "$STATUS" != "200" ]; then
+            echo "Warning: backend returned $STATUS"
+          fi

@@ -62,6 +62,10 @@ async function bootstrap() {
     }),
   );
 
+  // Health check — usado por GitHub Actions keepalive y monitoreo externo
+  const httpAdapter = app.getHttpAdapter();
+  httpAdapter.get('/api/v1/health', (_req: any, res: any) => res.json({ status: 'ok', ts: Date.now() }));
+
   const port = process.env.PORT || 4000;
   await app.listen(port, '0.0.0.0');
   console.log(`🚀 VendaCore API corriendo en: http://0.0.0.0:${port}/api/v1`);
